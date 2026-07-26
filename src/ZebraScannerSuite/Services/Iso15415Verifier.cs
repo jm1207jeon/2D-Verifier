@@ -302,17 +302,23 @@ public static class Iso15415Verifier
         return Math.Min(2.0, maxDev * halfModules * 0.25);
     }
 
-    /// <summary>ZXing 메타데이터 기반 UEC 근사</summary>
+    /// <summary>ZXing 메타데이터 기반 UEC 근사.
+    /// (ERRORS_CORRECTED 키는 ZXing 버전/심볼로지에 따라 없을 수 있어 이름으로 탐색)</summary>
     private static double EstimateUec(Result z, out string note)
     {
-        if (z.ResultMetadata != null &&
-            z.ResultMetadata.TryGetValue(ResultMetadataType.ERRORS_CORRECTED, out object? ecObj) &&
-            ecObj is int ec)
+        if (z.ResultMetadata != null)
         {
-            // 정정된 오류 수 기반 근사 (정정 용량은 심볼 크기에 따라 다름 → 보수적 근사)
-            double uec = Math.Max(0, 1.0 - ec / 8.0);
-            note = $"정정된 오류 {ec}개 기반 근사";
-            return uec;
+            foreach (var kv in z.ResultMetadata)
+            {
+                if (kv.Key.ToString().Contains("ERRORS_CORRECTED", StringComparison.OrdinalIgnoreCase) &&
+                    kv.Value is int ec)
+                {
+                    // 정정된 오류 수 기반 근사 (정정 용량은 심볼 크기에 따라 다름 → 보수적 근사)
+                    double uec = Math.Max(0, 1.0 - ec / 8.0);
+                    note = $"정정된 오류 {ec}개 기반 근사";
+                    return uec;
+                }
+            }
         }
         note = "오류정정 통계 미제공 → 디코드 성공 기준 추정";
         return 1.0;

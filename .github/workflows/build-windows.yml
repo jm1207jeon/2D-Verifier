@@ -1,0 +1,52 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # .NET 런타임 포함 단일 exe (사용 PC에 .NET 설치 불필요, Zebra SDK만 필요)
+      - name: Publish self-contained single-file exe
+        run: >
+          dotnet publish src/ZebraScannerSuite -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZebraScannerSuite-win-x64
+          path: publish/
+
+      - name: Zip for release
+        run: Compress-Archive -Path publish/* -DestinationPath ZebraScannerSuite-win-x64.zip
+
+      # 항상 최신 빌드를 'latest-build' 릴리스에 게시 (Releases 페이지에서 바로 다운로드)
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: "Latest Build (자동 빌드)"
+          body: |
+            GitHub Actions가 자동 빌드한 최신 실행 파일입니다.
+            - `ZebraScannerSuite-win-x64.zip` 압축 해제 후 `ZebraScannerSuite.exe` 실행
+            - 실행 PC에는 Zebra Scanner SDK for Windows(CoreScanner 드라이버)만 설치하면 됩니다 (.NET 설치 불필요)
+          files: ZebraScannerSuite-win-x64.zip
+          prerelease: true
