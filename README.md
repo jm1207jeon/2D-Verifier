@@ -35,16 +35,22 @@ Zebra **DS9908** 바코드 스캐너를 Windows PC에 연결해 사용하는 통
 
 ## 2. 빌드 (개발자)
 
-Windows + Visual Studio 2022 (또는 .NET 8 SDK) 필요. **빌드 PC에도 Zebra Scanner SDK가 설치되어 있어야**
-CoreScanner COM 타입 라이브러리에서 Interop이 자동 생성됩니다.
+Windows + **.NET 8 SDK**만 있으면 됩니다. CoreScanner 연동은 수동 COM interop
+(`Services/CoreScannerInterop.cs`)으로 구현되어 있어 빌드 시 Zebra SDK나 Visual Studio가 필요 없습니다.
 
 ```powershell
 dotnet build ZebraScannerSuite.sln -c Release
-# 배포용
+```
+
+생성 위치: `src\ZebraScannerSuite\bin\Release\net8.0-windows10.0.19041.0\ZebraScannerSuite.exe`
+
+```powershell
+# 다른 PC 배포용
 dotnet publish src/ZebraScannerSuite -c Release -r win-x64 --self-contained false
 ```
 
-> COM 등록 오류(0x80040154)가 나면 `csproj`의 `PlatformTarget`을 `x86`으로 바꿔 설치된 CoreScanner 비트수와 맞추세요.
+> - 실행 시 COM 등록 오류(0x80040154, "클래스가 등록되지 않았습니다")가 나면: 실행 PC에 Zebra Scanner SDK가 설치되어 있는지 확인하고, 그래도 같으면 `csproj`의 `PlatformTarget`을 `x86`으로 바꿔(32비트 SDK 설치 시) 다시 빌드하세요.
+> - `error MSB4803: ResolveComReference ...` 오류는 구버전 소스(COMReference 방식)에서만 발생합니다. 최신 소스를 받으세요.
 
 ---
 

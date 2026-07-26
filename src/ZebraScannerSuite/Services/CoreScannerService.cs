@@ -1,7 +1,7 @@
 using System.Text;
 using System.Xml.Linq;
-using CoreScanner;
 using ZebraScannerSuite.Models;
+using ZebraScannerSuite.Services.Interop;
 
 namespace ZebraScannerSuite.Services;
 
@@ -38,7 +38,8 @@ public sealed class CoreScannerService : IDisposable
         ("USB OPOS",                      "XUA-45001-8"),
     };
 
-    private CCoreScannerClass? _core;
+    private CoreScannerCom? _com;
+    private ICoreScanner? _core;
     private readonly object _lock = new();
 
     public bool IsOpen { get; private set; }
@@ -57,16 +58,17 @@ public sealed class CoreScannerService : IDisposable
         lock (_lock)
         {
             if (IsOpen) return;
-            _core = new CCoreScannerClass();
+            _com = new CoreScannerCom();
+            _core = _com.Api;
+            _com.Sink.BarcodeXml = OnBarcodeXml;
+            _com.Sink.ImageData = OnImageData;
+            _com.Sink.Pnp = OnPnp;
+
             short[] scannerTypes = { 1 }; // 1 = 모든 스캐너 타입
             _core.Open(0, scannerTypes, 1, out int status);
             if (status != 0)
                 throw new InvalidOperationException(
                     $"CoreScanner 초기화 실패 (status={status}). Zebra Scanner SDK(CoreScanner 드라이버) 설치 여부를 확인하세요.");
-
-            _core.BarcodeEvent += OnBarcodeEvent;
-            _core.ImageEvent += OnImageEvent;
-            _core.PNPEvent += OnPnpEvent;
 
             // 이벤트 구독: 1=Barcode 2=Image 4=Video 8=RMD 16=PNP 32=Other
             string inXml = "<inArgs><cmdArgs><arg-int>6</arg-int><arg-int>1,2,4,8,16,32</arg-int></cmdArgs></inArgs>";
@@ -162,7 +164,7 @@ public sealed class CoreScannerService : IDisposable
 
     // ---------------- 이벤트 핸들러 (COM 콜백 스레드) ----------------
 
-    private void OnBarcodeEvent(short eventType, ref string pscanData)
+    private void OnBarcodeXml(string pscanData)
     {
         try
         {
@@ -190,11 +192,11 @@ public sealed class CoreScannerService : IDisposable
         }
     }
 
-    private void OnImageEvent(short eventType, int size, short imageFormat, ref object sf, ref string pScanData)
+    private void OnImageData(byte[] bytes)
     {
         try
         {
-            if (sf is byte[] bytes && bytes.Length > 0)
+            if (bytes.Length > 0)
                 ImageCaptured?.Invoke(bytes);
         }
         catch (Exception ex)
@@ -203,7 +205,7 @@ public sealed class CoreScannerService : IDisposable
         }
     }
 
-    private void OnPnpEvent(short eventType, ref string ppnpData)
+    private void OnPnp()
     {
         try
         {
@@ -257,6 +259,8 @@ public sealed class CoreScannerService : IDisposable
                 catch { }
                 _core = null;
             }
+            try { _com?.Dispose(); } catch { }
+            _com = null;
             IsOpen = false;
         }
     }

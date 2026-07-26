@@ -18,24 +18,12 @@
     <PlatformTarget>AnyCPU</PlatformTarget>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!--
-      Zebra Scanner SDK for Windows (CoreScanner 드라이버)가 설치되어 있어야
-      빌드시 typelib에서 Interop이 자동 생성됩니다.
-      다운로드: https://www.zebra.com/us/en/support-downloads/software/developer-tools/scanner-sdk-for-windows.html
-      GUID는 Zebra 공식 샘플(Scanner-SDK-for-Windows)의 값과 동일합니다.
-    -->
-    <COMReference Include="CoreScanner">
-      <Guid>{DB07B9FC-18B0-4B55-9A44-31D2C2F87875}</Guid>
-      <VersionMajor>1</VersionMajor>
-      <VersionMinor>0</VersionMinor>
-      <Lcid>0</Lcid>
-      <WrapperTool>tlbimp</WrapperTool>
-      <Isolated>False</Isolated>
-      <EmbedInteropTypes>False</EmbedInteropTypes>
-    </COMReference>
-  </ItemGroup>
-
+  <!--
+    Zebra CoreScanner 연동은 Services/CoreScannerInterop.cs 의 수동 COM interop을 사용합니다.
+    (COMReference 미사용 → 'dotnet build' 만으로 빌드 가능, 빌드 PC에 Zebra SDK 불필요)
+    실행 PC에는 Zebra Scanner SDK for Windows(CoreScanner 드라이버) 설치가 필요합니다.
+    다운로드: https://www.zebra.com/us/en/support-downloads/software/developer-tools/scanner-sdk-for-windows.html
+  -->
   <ItemGroup>
     <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
     <PackageReference Include="ZXing.Net" Version="0.16.9" />
