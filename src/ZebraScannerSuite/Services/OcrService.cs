@@ -5,6 +5,7 @@ using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 using Windows.Storage.Streams;
+using ZebraScannerSuite.Models;
 
 namespace ZebraScannerSuite.Services;
 
@@ -62,6 +63,28 @@ public sealed class OcrService
         {
             bmp.Dispose();
         }
+    }
+
+    /// <summary>강제 OCR 규칙 적용: 첫 번째로 일치하는 규칙의 출력(공백 제거)을 반환.
+    /// 예) "Lot No. 26070124 / SN. 14" → "26070124-14"</summary>
+    public static string? ApplyForceRules(string text, IEnumerable<ForceOcrRule> rules)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        foreach (var rule in rules)
+        {
+            if (string.IsNullOrWhiteSpace(rule.Pattern)) continue;
+            try
+            {
+                var m = Regex.Match(text, rule.Pattern,
+                    RegexOptions.IgnoreCase | RegexOptions.Multiline, TimeSpan.FromSeconds(1));
+                if (!m.Success) continue;
+                string output = string.IsNullOrWhiteSpace(rule.Output) ? m.Value : m.Result(rule.Output);
+                output = Regex.Replace(output, @"\s+", "");
+                if (output.Length > 0) return output;
+            }
+            catch { /* 잘못된 정규식은 건너뜀 */ }
+        }
+        return null;
     }
 
     /// <summary>패턴(정규식) 목록과 일치하는 부분만 추출. 패턴이 없으면 전체 텍스트 반환.</summary>

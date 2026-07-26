@@ -16,6 +16,15 @@ public class ExtractionRule
     public bool DateConvert { get; set; }
 }
 
+/// <summary>강제 스캔(OCR) 모드에서 텍스트 라벨을 값으로 변환하는 규칙.
+/// 정규식 캡처 그룹을 Output의 $1,$2.. 로 조합한다.</summary>
+public class ForceOcrRule
+{
+    public string Name { get; set; } = "";
+    public string Pattern { get; set; } = "";
+    public string Output { get; set; } = "$1";
+}
+
 public class AppSettings
 {
     public string ImageSaveDirectory { get; set; } =
@@ -43,6 +52,28 @@ public class AppSettings
     public string PreferredHostMode { get; set; } = "XUA-45001-9"; // USB SNAPI with imaging
 
     public bool MultiAutoRetrigger { get; set; } = true;
+
+    /// <summary>강제 스캔(OCR) 모드 활성 상태 (F9)</summary>
+    public bool ForceOcrEnabled { get; set; }
+
+    /// <summary>강제 OCR 변환 규칙 (위에서부터 순서대로 첫 일치 규칙 적용)</summary>
+    public ObservableCollection<ForceOcrRule> ForceOcrRules { get; set; } = new()
+    {
+        // 유형1: "Lot No. 26070124" + "SN. 14" → 26070124-14 (SN 1자리면 -1)
+        new ForceOcrRule
+        {
+            Name = "유형1 Lot+SN",
+            Pattern = @"Lot\s*No\.?\s*[:.]?\s*(\d{4,12})[\s\S]{0,60}?S\s*/?\s*N\.?\s*[:.]?\s*(\d{1,4})",
+            Output = "$1-$2",
+        },
+        // 유형2: "26070124-11" / "26070124-1" → 그대로
+        new ForceOcrRule
+        {
+            Name = "유형2 결합형",
+            Pattern = @"(\d{7,10})\s*-\s*(\d{1,4})",
+            Output = "$1-$2",
+        },
+    };
 
     public ObservableCollection<ExtractionRule> ExtractionRules { get; set; } = new()
     {

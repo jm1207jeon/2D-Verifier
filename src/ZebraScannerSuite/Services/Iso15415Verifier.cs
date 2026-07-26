@@ -15,17 +15,27 @@ namespace ZebraScannerSuite.Services;
 /// 정해진 개구(aperture), 교정된 반사율 기준을 요구하므로 본 결과는
 /// 공식 성적서가 아닌 "경향 파악용" 참고 데이터입니다.
 ///
-/// 산출 파라미터:
-///  - Decode(디코드), Symbol Contrast(SC), Modulation(MOD, 추정),
-///    Axial Nonuniformity(AN, 추정), Grid Nonuniformity(GN, 추정),
-///    Unused Error Correction(UEC, 추정), Fixed Pattern Damage(FPD, 추정)
+/// 산출 파라미터: Decode, SC, MOD(추정), AN(추정), GN(추정), UEC(추정), FPD(추정)
 /// 종합 등급 = 파라미터 중 최저 등급 (ISO 15415 방식)
+/// 추가 산출물:
+///  - AnnotatedPng: 문제 영역 오버레이 (심볼 영역 / 저모듈레이션 셀 / 파인더·클록 상태)
+///  - Recommendations: 등급이 낮은 파라미터별 개선 가이드
 /// </summary>
 public static class Iso15415Verifier
 {
+    /// <summary>오버레이 표시용 주석 정보</summary>
+    private sealed class AnnotationInfo
+    {
+        public RectangleF Bbox;
+        public List<RectangleF> LowModCells { get; } = new();               // MOD < 0.30 셀
+        public List<(RectangleF Box, double Score)> Finders { get; } = new(); // QR 파인더
+        public List<(PointF A, PointF B, bool Solid, double Score)> DmEdges { get; } = new();
+    }
+
     public static VerificationResult Verify(Bitmap bmp)
     {
         var r = new VerificationResult();
+        var ann = new AnnotationInfo();
         int w = bmp.Width, h = bmp.Height;
         byte[] gray = ToGray(bmp, out int stride);
 
@@ -80,6 +90,7 @@ public static class Iso15415Verifier
             bbox = new RectangleF(w * 0.2f, h * 0.2f, w * 0.6f, h * 0.6f);
             r.Notes.Add("디코드 실패로 이미지 중앙 영역을 기준으로 반사율만 산출했습니다.");
         }
+        ann.Bbox = bbox;
 
         // ---- 반사율 / Symbol Contrast ----
         var (rminByte, rmaxByte) = Percentiles(gray, stride, bbox, 0.02, 0.98);
@@ -105,11 +116,11 @@ public static class Iso15415Verifier
 
             if (pitch >= 1.5)
             {
-                // ---- Modulation (추정) ----
-                double mod = EstimateModulation(gray, stride, bbox, gt, pitch, rmaxByte - rminByte);
+                // ---- Modulation (추정) + 저모듈 셀 수집 ----
+                double mod = EstimateModulation(gray, stride, bbox, gt, pitch, rmaxByte - rminByte, ann.LowModCells);
                 r.Params.Add(Grade("Modulation (MOD, 추정)", $"{mod:0.00}",
                     mod >= 0.50 ? 4 : mod >= 0.40 ? 3 : mod >= 0.30 ? 2 : mod >= 0.20 ? 1 : 0,
-                    "이미지 기반 추정치"));
+                    "빨간 셀 = 저모듈레이션 의심 영역"));
 
                 if (is2D)
                 {
@@ -117,9 +128,9 @@ public static class Iso15415Verifier
                     double an = Math.Abs(pitchX - pitchY) / ((pitchX + pitchY) / 2);
                     r.Params.Add(Grade("Axial Nonuniformity (AN, 추정)", $"{an:0.000}",
                         an <= 0.06 ? 4 : an <= 0.08 ? 3 : an <= 0.10 ? 2 : an <= 0.12 ? 1 : 0,
-                        "X/Y 모듈 피치 비교"));
+                        $"X피치 {pitchX:0.0}px / Y피치 {pitchY:0.0}px"));
 
-                    // ---- Grid Nonuniformity (추정): 사분면 피치 편차 ----
+                    // ---- Grid Nonuniformity (추정) ----
                     double gn = EstimateGridNonuniformity(gray, stride, bbox, gt, pitch);
                     r.Params.Add(Grade("Grid Nonuniformity (GN, 추정)", $"{gn:0.00} 모듈",
                         gn <= 0.38 ? 4 : gn <= 0.50 ? 3 : gn <= 0.63 ? 2 : gn <= 0.75 ? 1 : 0,
@@ -130,14 +141,14 @@ public static class Iso15415Verifier
                     r.Params.Add(Grade("Unused EC (UEC, 추정)", $"{uec:0.00}",
                         uec >= 0.62 ? 4 : uec >= 0.50 ? 3 : uec >= 0.37 ? 2 : uec >= 0.25 ? 1 : 0, uecNote));
 
-                    // ---- Fixed Pattern Damage (추정) ----
-                    double? fpd = EstimateFixedPattern(z!, gray, stride, w, h, gt, pitch);
+                    // ---- Fixed Pattern Damage (추정) + 파인더/엣지 주석 ----
+                    double? fpd = EstimateFixedPattern(z!, gray, stride, w, h, gt, pitch, ann);
                     if (fpd.HasValue)
                     {
                         double f = fpd.Value;
                         r.Params.Add(Grade("Fixed Pattern Damage (FPD, 추정)", $"일치율 {f:P0}",
                             f >= 0.95 ? 4 : f >= 0.90 ? 3 : f >= 0.85 ? 2 : f >= 0.80 ? 1 : 0,
-                            "파인더/클록 패턴 샘플링"));
+                            "오버레이의 파인더/클록 박스 색상 참조"));
                     }
                     else
                     {
@@ -160,6 +171,7 @@ public static class Iso15415Verifier
         r.OverallNumeric = graded.Count > 0 ? graded.Min(p => p.Numeric) : 0;
         r.OverallLetter = ParamGrade.ToLetter(r.OverallNumeric);
 
+        r.Recommendations = BuildRecommendations(r);
         r.Notes.Add("본 결과는 전용 검증기 없이 스캐너 이미지로 산출한 시뮬레이션(경향 파악용)이며 ISO/IEC 15415 공식 측정이 아닙니다.");
 
         using (var ms = new MemoryStream())
@@ -167,6 +179,8 @@ public static class Iso15415Verifier
             bmp.Save(ms, ImageFormat.Png);
             r.ImagePng = ms.ToArray();
         }
+        try { r.AnnotatedPng = Annotate(bmp, ann); }
+        catch { r.AnnotatedPng = r.ImagePng; }
         return r;
     }
 
@@ -174,6 +188,105 @@ public static class Iso15415Verifier
     {
         Parameter = name, Value = value, Numeric = numeric, Letter = ParamGrade.ToLetter(numeric), Note = note,
     };
+
+    // ---------------- 개선 권장사항 ----------------
+
+    private static List<string> BuildRecommendations(VerificationResult r)
+    {
+        var recs = new List<string>();
+        foreach (var p in r.Params)
+        {
+            if (p.Numeric < 0 || p.Numeric > 2) continue; // C(2.0) 이하만
+            string name = p.Parameter;
+            if (name.StartsWith("Decode"))
+                recs.Add("디코드 실패: 스캐너와 심볼의 거리·초점을 조정하고 심볼 전체가 화면 중앙에 오도록 하세요. 인쇄 누락·심한 훼손 여부를 확인하세요.");
+            else if (name.StartsWith("Symbol Contrast"))
+                recs.Add("심볼 대비(SC) 부족: 잉크 농도(레이저면 마킹 에너지)를 높이고, 광택·투명 배경을 피하세요. 조명 반사가 심하면 스캐너 각도를 10~15° 기울여 보세요.");
+            else if (name.StartsWith("Modulation"))
+                recs.Add("모듈 균일성(MOD) 저하: 오버레이의 빨간 셀 위치를 확인하세요. 도트게인(잉크 번짐), 리본/프린트헤드 마모, 잉크 뭉침이 주원인입니다. 셀 크기 확대 또는 인쇄 해상도 향상을 검토하세요.");
+            else if (name.StartsWith("Axial"))
+                recs.Add("축 불균일(AN): 셀이 정사각형이 아닙니다. 프린터의 용지 이송 속도와 헤드 해상도 비율(X/Y 배율)을 보정하세요.");
+            else if (name.StartsWith("Grid"))
+                recs.Add("격자 불균일(GN): 곡면·주름 표면 부착, 라벨 부착 시 늘어짐이 주원인입니다. 평탄한 위치에 부착하고 프린터 용지 정렬을 점검하세요.");
+            else if (name.StartsWith("Unused EC"))
+                recs.Add("오류정정 여유(UEC) 부족: 심볼 표면의 오염·긁힘을 제거하세요. 특정 위치 손상이 반복되면 인쇄 공정(헤드 단선 등) 결함을 점검하세요.");
+            else if (name.StartsWith("Fixed Pattern"))
+                recs.Add("고정 패턴 손상(FPD): 오버레이에 주황/빨강으로 표시된 파인더·클록 트랙 영역의 오염이나 인쇄 결함을 제거하고, 심볼 주변 Quiet Zone(여백)을 확보하세요.");
+        }
+        if (recs.Count == 0 && r.Decoded)
+            recs.Add("주요 파라미터가 모두 양호(B 이상)합니다. 현재 인쇄/마킹 조건을 유지하세요.");
+        return recs;
+    }
+
+    // ---------------- 오버레이 렌더링 ----------------
+
+    private static byte[] Annotate(Bitmap src, AnnotationInfo ann)
+    {
+        using var canvas = new Bitmap(src.Width, src.Height, PixelFormat.Format24bppRgb);
+        using (var g = Graphics.FromImage(canvas))
+        {
+            g.DrawImage(src, 0, 0, src.Width, src.Height);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            // 심볼 영역
+            using (var penBox = new Pen(Color.DodgerBlue, 2f))
+                g.DrawRectangle(penBox, ann.Bbox.X, ann.Bbox.Y, ann.Bbox.Width, ann.Bbox.Height);
+
+            // 저모듈레이션 셀 (최대 400개)
+            using (var lowBrush = new SolidBrush(Color.FromArgb(90, 255, 0, 0)))
+            using (var lowPen = new Pen(Color.FromArgb(180, 255, 0, 0), 1f))
+            {
+                foreach (var c in ann.LowModCells.Take(400))
+                {
+                    g.FillRectangle(lowBrush, c);
+                    g.DrawRectangle(lowPen, c.X, c.Y, c.Width, c.Height);
+                }
+            }
+
+            // QR 파인더 패턴 상태
+            foreach (var (box, score) in ann.Finders)
+            {
+                var color = score >= 0.95 ? Color.LimeGreen : score >= 0.85 ? Color.Orange : Color.Red;
+                using var pen = new Pen(color, 2.5f);
+                g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+                DrawLabel(g, $"{score:P0}", box.X, box.Y - 16, color);
+            }
+
+            // DataMatrix L-파인더 / 클록트랙
+            foreach (var (a, b, solid, score) in ann.DmEdges)
+            {
+                var good = solid ? score >= 0.90 : score >= 0.50;
+                var color = solid
+                    ? (good ? Color.LimeGreen : Color.Red)
+                    : (good ? Color.Orange : Color.Red);
+                using var pen = new Pen(Color.FromArgb(200, color), 3f);
+                g.DrawLine(pen, a, b);
+            }
+
+            // 범례
+            float ly = 6;
+            DrawLabel(g, "파랑=심볼 영역", 6, ly, Color.DodgerBlue); ly += 18;
+            if (ann.LowModCells.Count > 0)
+            { DrawLabel(g, $"빨간 셀={ann.LowModCells.Count}개 저모듈레이션(번짐/결손 의심)", 6, ly, Color.Red); ly += 18; }
+            if (ann.Finders.Count > 0)
+            { DrawLabel(g, "박스=파인더 상태(녹색 양호/주황 주의/빨강 손상)", 6, ly, Color.Orange); ly += 18; }
+            if (ann.DmEdges.Count > 0)
+                DrawLabel(g, "선=DM L-파인더(녹색)/클록트랙(주황), 빨강=손상 의심", 6, ly, Color.Orange);
+        }
+        using var ms = new MemoryStream();
+        canvas.Save(ms, ImageFormat.Png);
+        return ms.ToArray();
+    }
+
+    private static void DrawLabel(Graphics g, string text, float x, float y, Color color)
+    {
+        using var font = new Font("Malgun Gothic", 9f, System.Drawing.FontStyle.Bold);
+        var size = g.MeasureString(text, font);
+        using var bg = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+        g.FillRectangle(bg, x - 2, y - 1, size.Width + 4, size.Height + 2);
+        using var fg = new SolidBrush(color);
+        g.DrawString(text, font, fg, x, y);
+    }
 
     // ---------------- 이미지 분석 유틸 ----------------
 
@@ -233,7 +346,7 @@ public static class Iso15415Verifier
 
         for (int o = outer0; o < outer1; o += 3)
         {
-            bool prev = SampleIsBlack(g, stride, horizontal ? inner0 : o, horizontal ? o : inner0, gt, horizontal);
+            bool prev = horizontal ? g[o * stride + inner0] < gt : g[inner0 * stride + o] < gt;
             int run = 1;
             for (int i = inner0 + 1; i < inner1; i++)
             {
@@ -247,11 +360,9 @@ public static class Iso15415Verifier
         return runs[runs.Count / 2];
     }
 
-    private static bool SampleIsBlack(byte[] g, int stride, int x, int y, double gt, bool _)
-        => g[y * stride + x] < gt;
-
-    /// <summary>셀 격자 샘플링으로 MOD 근사(하위 10퍼센타일)</summary>
-    private static double EstimateModulation(byte[] g, int stride, RectangleF box, double gt, double pitch, double scByte)
+    /// <summary>셀 격자 샘플링으로 MOD 근사(하위 10퍼센타일). MOD&lt;0.30 셀은 lowCells에 수집.</summary>
+    private static double EstimateModulation(byte[] g, int stride, RectangleF box, double gt,
+        double pitch, double scByte, List<RectangleF> lowCells)
     {
         if (scByte <= 0) return 0;
         var mods = new List<double>();
@@ -259,7 +370,11 @@ public static class Iso15415Verifier
             for (double cx = box.Left + pitch / 2; cx < box.Right - 1; cx += pitch)
             {
                 double v = SampleMean(g, stride, (int)cx, (int)cy);
-                mods.Add(Math.Min(1.0, 2.0 * Math.Abs(v - gt) / scByte));
+                double m = Math.Min(1.0, 2.0 * Math.Abs(v - gt) / scByte);
+                mods.Add(m);
+                if (m < 0.30 && lowCells.Count < 2000)
+                    lowCells.Add(new RectangleF(
+                        (float)(cx - pitch / 2), (float)(cy - pitch / 2), (float)pitch, (float)pitch));
             }
         if (mods.Count == 0) return 0;
         mods.Sort();
@@ -297,7 +412,6 @@ public static class Iso15415Verifier
             foreach (double p in new[] { px, py })
                 if (p > 0) maxDev = Math.Max(maxDev, Math.Abs(p - globalPitch) / globalPitch);
         }
-        // 상대 편차가 심볼 반폭에 누적된다고 근사 → 모듈 단위 편차
         double halfModules = Math.Max(4, box.Width / 2 / globalPitch);
         return Math.Min(2.0, maxDev * halfModules * 0.25);
     }
@@ -313,7 +427,6 @@ public static class Iso15415Verifier
                 if (kv.Key.ToString().Contains("ERRORS_CORRECTED", StringComparison.OrdinalIgnoreCase) &&
                     kv.Value is int ec)
                 {
-                    // 정정된 오류 수 기반 근사 (정정 용량은 심볼 크기에 따라 다름 → 보수적 근사)
                     double uec = Math.Max(0, 1.0 - ec / 8.0);
                     note = $"정정된 오류 {ec}개 기반 근사";
                     return uec;
@@ -324,8 +437,9 @@ public static class Iso15415Verifier
         return 1.0;
     }
 
-    /// <summary>QR 파인더 패턴 / DataMatrix L-파인더+클록트랙 일치율 (0~1)</summary>
-    private static double? EstimateFixedPattern(Result z, byte[] g, int stride, int w, int h, double gt, double pitch)
+    /// <summary>QR 파인더 패턴 / DataMatrix L-파인더+클록트랙 일치율 (0~1). 주석 정보도 수집.</summary>
+    private static double? EstimateFixedPattern(Result z, byte[] g, int stride, int w, int h,
+        double gt, double pitch, AnnotationInfo ann)
     {
         if (z.ResultPoints == null || z.ResultPoints.Length < 3 || pitch < 2) return null;
 
@@ -348,24 +462,29 @@ public static class Iso15415Verifier
                         if (black == idealBlack) match++;
                         n++;
                     }
-                if (n > 0) { total += (double)match / n; cnt++; }
+                if (n > 0)
+                {
+                    double score = (double)match / n;
+                    total += score; cnt++;
+                    float half = (float)(3.5 * pitch);
+                    ann.Finders.Add((new RectangleF(p.X - half, p.Y - half, half * 2, half * 2), score));
+                }
             }
             return cnt > 0 ? total / cnt : null;
         }
 
         if (z.BarcodeFormat == BarcodeFormat.DATA_MATRIX && z.ResultPoints.Length >= 4)
         {
-            // 4 코너 → 각 변을 0.5모듈 안쪽에서 샘플링.
-            // 솔리드 L(항상 흑) 2변 + 클록트랙(교대) 2변
+            // 4 코너 → 각 변을 0.7모듈 안쪽에서 샘플링. 솔리드 L(항상 흑) 2변 + 클록트랙(교대) 2변
             var pts = z.ResultPoints;
-            var edgeScores = new List<(double blackFrac, double altFrac)>();
+            var edges = new List<(double blackFrac, double altFrac, PointF a, PointF b)>();
+            double cx0 = pts.Average(p => p.X), cy0 = pts.Average(p => p.Y);
             for (int e = 0; e < 4; e++)
             {
                 var a = pts[e]; var b = pts[(e + 1) % 4];
-                // 심볼 중심 방향으로 0.7 모듈 인셋
-                double cx0 = pts.Average(p => p.X), cy0 = pts.Average(p => p.Y);
                 int steps = Math.Max(8, (int)(Dist(a, b) / pitch));
                 int black = 0, trans = 0, n = 0; bool? prev = null;
+                PointF ia = default, ib = default;
                 for (int i = 0; i <= steps; i++)
                 {
                     double t = (double)i / steps;
@@ -373,18 +492,25 @@ public static class Iso15415Verifier
                     double vx = cx0 - x, vy = cy0 - y;
                     double vl = Math.Sqrt(vx * vx + vy * vy);
                     if (vl > 0) { x += vx / vl * pitch * 0.7; y += vy / vl * pitch * 0.7; }
+                    if (i == 0) ia = new PointF((float)x, (float)y);
+                    if (i == steps) ib = new PointF((float)x, (float)y);
                     if (x < 1 || y < 1 || x >= stride - 1) continue;
                     bool bl = SampleMean(g, stride, (int)x, (int)y) < gt;
                     if (bl) black++;
                     if (prev.HasValue && prev != bl) trans++;
                     prev = bl; n++;
                 }
-                if (n > 4) edgeScores.Add(((double)black / n, Math.Min(1.0, trans / (double)(n / 2))));
+                if (n > 4) edges.Add(((double)black / n, Math.Min(1.0, trans / (double)(n / 2)), ia, ib));
             }
-            if (edgeScores.Count < 4) return null;
-            var byBlack = edgeScores.OrderByDescending(s => s.blackFrac).ToList();
-            double solid = (byBlack[0].blackFrac + byBlack[1].blackFrac) / 2;   // L-파인더
-            double clock = (byBlack[2].altFrac + byBlack[3].altFrac) / 2;        // 클록트랙
+            if (edges.Count < 4) return null;
+            var byBlack = edges.OrderByDescending(s => s.blackFrac).ToList();
+            // 상위 2 = L-파인더(솔리드), 하위 2 = 클록트랙
+            ann.DmEdges.Add((byBlack[0].a, byBlack[0].b, true, byBlack[0].blackFrac));
+            ann.DmEdges.Add((byBlack[1].a, byBlack[1].b, true, byBlack[1].blackFrac));
+            ann.DmEdges.Add((byBlack[2].a, byBlack[2].b, false, byBlack[2].altFrac));
+            ann.DmEdges.Add((byBlack[3].a, byBlack[3].b, false, byBlack[3].altFrac));
+            double solid = (byBlack[0].blackFrac + byBlack[1].blackFrac) / 2;
+            double clock = (byBlack[2].altFrac + byBlack[3].altFrac) / 2;
             return Math.Min(solid, Math.Max(0.5, clock));
         }
         return null;

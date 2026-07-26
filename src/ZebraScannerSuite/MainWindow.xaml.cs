@@ -77,6 +77,10 @@ public partial class MainWindow : Window
 
         await Task.Run(InitScanner);
         UpdateScannerStatus();
+
+        // 강제 스캔 모드가 저장되어 있으면 스캐너 연결 후 재무장
+        if (ForceOcrCheck.IsChecked == true)
+            ForceOcr_Toggled(this, new RoutedEventArgs());
     }
 
     private void InitScanner()
@@ -122,6 +126,8 @@ public partial class MainWindow : Window
         CopyClipboardCheck.IsChecked = _settings.CopyOcrToClipboard;
         MultiRetriggerCheck.IsChecked = _settings.MultiAutoRetrigger;
         RulesGrid.ItemsSource = _settings.ExtractionRules;
+        ForceRulesGrid.ItemsSource = _settings.ForceOcrRules;
+        ForceOcrCheck.IsChecked = _settings.ForceOcrEnabled;
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode == 1;
@@ -143,6 +149,7 @@ public partial class MainWindow : Window
             .Split('\n').Select(s => s.Trim('\r').Trim()).Where(s => s.Length > 0).ToList();
         _settings.CopyOcrToClipboard = CopyClipboardCheck.IsChecked == true;
         _settings.MultiAutoRetrigger = MultiRetriggerCheck.IsChecked == true;
+        _settings.ForceOcrEnabled = ForceOcrCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
         if (HostModeCombo.SelectedItem is ComboBoxItem { Tag: string code })
             _settings.PreferredHostMode = code;
@@ -278,6 +285,13 @@ public partial class MainWindow : Window
 
         ShowPreview(imageBytes);
 
+        // 강제 스캔(OCR) 모드: 촬영 이미지에서 바코드 → 텍스트 순으로 인식
+        if (!_awaitingScanImage && ForceOcrCheck.IsChecked == true && MainTabs.SelectedIndex == 0)
+        {
+            ProcessForceImage(imageBytes);
+            return;
+        }
+
         if (!_awaitingScanImage || _pendingScan == null)
         {
             SetStatus("이미지 수신");
@@ -320,6 +334,141 @@ public partial class MainWindow : Window
                 });
             }
         });
+    }
+
+    // ==================== 강제 스캔(OCR) 모드 ====================
+    // SNAPI에서는 '디코드 실패' 이벤트가 호스트로 전달되지 않아 "트리거 2회"를 감지할 수 없다.
+    // 대신 모드를 켜면(F9) 트리거 1회 = 촬영이 되고, 촬영 이미지에서
+    // ① 소프트웨어 바코드 디코드(ZXing) 시도 → ② 실패 시 강제 OCR 규칙(유형1/2)으로 값 추출.
+
+    private void ForceOcr_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        bool on = ForceOcrCheck.IsChecked == true;
+        if (_scanner?.ActiveScanner is not { } dev)
+        {
+            if (on) SetStatus("스캐너 미연결 - 강제 스캔 모드는 스캐너 연결 후 동작합니다.");
+            return;
+        }
+        Task.Run(() =>
+        {
+            bool ok = on ? _scanner.SetCaptureImageMode(dev.Id) : _scanner.SetCaptureBarcodeMode(dev.Id);
+            Dispatcher.BeginInvoke(() => SetStatus(on
+                ? (ok ? "강제 스캔 모드 ON - 트리거를 당기면 촬영 후 바코드/텍스트를 인식합니다."
+                      : "강제 스캔 모드 전환 실패 - 'USB SNAPI (이미징 지원)' 모드인지 확인하세요.")
+                : "강제 스캔 모드 OFF - 일반 바코드 디코드 모드로 복귀"));
+        });
+    }
+
+    private void Window_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.F9)
+        {
+            ForceOcrCheck.IsChecked = ForceOcrCheck.IsChecked != true;
+            e.Handled = true;
+        }
+    }
+
+    private void ProcessForceImage(byte[] bytes)
+    {
+        CollectSettingsFromUi();
+        var settingsSnapshot = _settings;
+        SetStatus("강제 스캔: 분석 중 (바코드 → 텍스트 순)...");
+
+        Enqueue(async () =>
+        {
+            // ① 소프트웨어 바코드 디코드 시도
+            BarcodeData? sw = TrySoftwareDecode(bytes);
+
+            // ② OCR (강제 규칙 → 일반 허용 패턴 순)
+            string ocrText = "";
+            if (_ocr is { IsAvailable: true })
+                ocrText = await _ocr.RecognizeAsync(bytes);
+            string force = OcrService.ApplyForceRules(ocrText, settingsSnapshot.ForceOcrRules) ?? "";
+            if (force.Length == 0 && sw == null)
+                force = OcrService.FilterByPatterns(ocrText, settingsSnapshot.OcrPatterns).FirstOrDefault() ?? "";
+
+            // ③ 이미지 저장 ({BARCODE} 토큰 = 바코드값 또는 OCR값)
+            string baseName = sw?.Text ?? (force.Length > 0 ? force : "NOCODE");
+            string path = ImageSaveService.Save(bytes, baseName, sw?.Symbology ?? "TEXT", force, settingsSnapshot);
+
+            var record = new ScanRecord
+            {
+                Barcode = sw?.Text ?? (force.Length > 0 ? force : "(텍스트 인식 실패)"),
+                Symbology = sw != null ? sw.Symbology + " (SW)" : "OCR",
+                OcrValue = force,
+                ImagePath = Path.GetFileName(path),
+            };
+
+            await Dispatcher.BeginInvoke(() =>
+            {
+                if (sw != null)
+                {
+                    BarcodeText.Text = sw.Text;
+                    SymbologyText.Text = sw.Symbology + " (SW)";
+                    _fields.Clear();
+                    foreach (var f in DataExtractionService.Apply(sw.Text, settingsSnapshot.ExtractionRules))
+                        _fields.Add(f);
+                }
+                else
+                {
+                    BarcodeText.Text = force;
+                    SymbologyText.Text = "OCR";
+                    _fields.Clear();
+                }
+                OcrResultText.Text = force;
+                _history.Insert(0, record);
+                while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
+                if (force.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
+                    try { Clipboard.SetText(force); } catch { }
+                SetStatus(sw != null
+                    ? $"강제 스캔: 바코드 인식 ({sw.Symbology}) + 이미지 저장 완료"
+                    : force.Length > 0
+                        ? $"강제 스캔 OCR: {force} (이미지 저장 완료)"
+                        : "강제 스캔: 바코드/패턴 인식 실패 (이미지는 저장됨)");
+            });
+
+            RearmForceCapture();
+        });
+    }
+
+    /// <summary>촬영 이미지에서 ZXing으로 바코드 디코드 시도 (강제 스캔 모드용 폴백)</summary>
+    private static BarcodeData? TrySoftwareDecode(byte[] bytes)
+    {
+        try
+        {
+            using var bmp = LoadBitmap(bytes);
+            var reader = new ZXing.Windows.Compatibility.BarcodeReader
+            {
+                AutoRotate = true,
+                Options = new ZXing.Common.DecodingOptions { TryHarder = true, TryInverted = true },
+            };
+            var res = reader.Decode(bmp);
+            if (res == null || string.IsNullOrEmpty(res.Text)) return null;
+            return new BarcodeData { Text = res.Text, Symbology = res.BarcodeFormat.ToString(), Time = DateTime.Now };
+        }
+        catch { return null; }
+    }
+
+    /// <summary>강제 스캔 모드 유지: 이미지 수신 후 스캐너가 디코드 모드로 복귀하므로 다시 촬영 모드로 무장</summary>
+    private void RearmForceCapture()
+    {
+        if (_scanner?.ActiveScanner is not { } dev) return;
+        bool on = Dispatcher.Invoke(() => ForceOcrCheck.IsChecked == true && MainTabs.SelectedIndex == 0);
+        if (!on) return;
+        Task.Run(() =>
+        {
+            Thread.Sleep(150);
+            _scanner.SetCaptureImageMode(dev.Id);
+        });
+    }
+
+    private void AddForceRule_Click(object sender, RoutedEventArgs e) =>
+        _settings.ForceOcrRules.Add(new ForceOcrRule { Name = "새 규칙", Pattern = @"(\d+)", Output = "$1" });
+
+    private void DelForceRule_Click(object sender, RoutedEventArgs e)
+    {
+        if (ForceRulesGrid.SelectedItem is ForceOcrRule r) _settings.ForceOcrRules.Remove(r);
     }
 
     private void ShowPreview(byte[] bytes)
@@ -612,6 +761,7 @@ public partial class MainWindow : Window
                 ShowVerifyResult(result);
                 SetStatus($"검증 완료: 종합 {result.OverallLetter} ({result.OverallNumeric:0.0})");
             });
+            RearmForceCapture(); // 강제 스캔 모드였다면 촬영 모드 복귀
         });
     }
 
@@ -630,12 +780,23 @@ public partial class MainWindow : Window
         };
         VerifyFormatText.Text = r.Format;
         VerifyDecodedText.Text = r.DecodedText;
-        VerifyNotesText.Text = string.Join(Environment.NewLine + "• ", r.Notes.Prepend("").ToArray()).TrimStart('\r', '\n');
 
-        if (r.ImagePng.Length > 0)
+        var lines = new List<string>();
+        if (r.Recommendations.Count > 0)
+        {
+            lines.Add("▶ 개선 권장사항");
+            lines.AddRange(r.Recommendations.Select(x => "  • " + x));
+            lines.Add("");
+        }
+        lines.AddRange(r.Notes.Select(n => "• " + n));
+        VerifyNotesText.Text = string.Join(Environment.NewLine, lines);
+
+        byte[] imgBytes = OverlayCheck.IsChecked == true && r.AnnotatedPng.Length > 0
+            ? r.AnnotatedPng : r.ImagePng;
+        if (imgBytes.Length > 0)
         {
             var bmp = new BitmapImage();
-            using (var ms = new MemoryStream(r.ImagePng))
+            using (var ms = new MemoryStream(imgBytes))
             {
                 bmp.BeginInit();
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
@@ -645,6 +806,12 @@ public partial class MainWindow : Window
             bmp.Freeze();
             VerifyImage.Source = bmp;
         }
+    }
+
+    private void OverlayCheck_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (VerifySessionList.SelectedItem is VerificationResult r) ShowVerifyResult(r);
     }
 
     private void VerifySessionList_SelectionChanged(object sender, SelectionChangedEventArgs e)

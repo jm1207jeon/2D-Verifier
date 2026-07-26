@@ -71,6 +71,10 @@ public class VerificationResult
     public double OverallNumeric { get; set; }
     public string OverallLetter { get; set; } = "F";
     public List<string> Notes { get; set; } = new();
+    /// <summary>문제 영역이 강조된 오버레이 이미지 (심볼 영역/저모듈 셀/파인더 상태)</summary>
+    public byte[] AnnotatedPng { get; set; } = Array.Empty<byte>();
+    /// <summary>등급이 낮은 파라미터별 개선 권장사항</summary>
+    public List<string> Recommendations { get; set; } = new();
     public byte[] ImagePng { get; set; } = Array.Empty<byte>();
     public string TimeText => Time.ToString("yyyy-MM-dd HH:mm:ss");
     public string Summary => $"{TimeText}  {OverallLetter} ({OverallNumeric:0.0})  {Format}  {Truncate(DecodedText, 30)}";

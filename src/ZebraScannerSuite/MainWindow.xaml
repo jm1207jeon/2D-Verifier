@@ -4,7 +4,7 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="Zebra DS9908 Scanner Suite" Height="880" Width="1400"
         WindowStartupLocation="CenterScreen"
-        Loaded="Window_Loaded" Closing="Window_Closing">
+        Loaded="Window_Loaded" Closing="Window_Closing" KeyDown="Window_KeyDown">
     <Window.Resources>
         <x:Array x:Key="RuleTypes" Type="sys:String">
             <sys:String>GS1</sys:String>
@@ -60,6 +60,11 @@
                                              Checked="Mode_Changed" VerticalAlignment="Center"/>
                                 <RadioButton x:Name="ModeBarcodeImageOcr" Content="③ 바코드 + 이미지 + OCR 입력" Margin="4,4,14,4"
                                              Checked="Mode_Changed" VerticalAlignment="Center"/>
+                                <CheckBox x:Name="ForceOcrCheck" Margin="4,4,14,4" VerticalAlignment="Center"
+                                          Foreground="#FFB03A2E" FontWeight="Bold"
+                                          Content="강제 스캔 OCR (F9): 트리거=촬영 → 바코드 없으면 텍스트 인식"
+                                          Checked="ForceOcr_Toggled" Unchecked="ForceOcr_Toggled"
+                                          ToolTip="바코드가 없는 텍스트 라벨용. 켜면 트리거를 당길 때마다 사진을 촬영해 바코드를 먼저 찾고, 없으면 강제 OCR 규칙(Lot+SN 등)으로 값을 추출합니다."/>
                                 <Separator Width="12" Visibility="Hidden"/>
                                 <TextBlock Text="호스트 모드:" VerticalAlignment="Center" Margin="8,0,4,0"/>
                                 <ComboBox x:Name="HostModeCombo" Width="215" VerticalAlignment="Center"/>
@@ -174,6 +179,25 @@
                                 </StackPanel>
                             </GroupBox>
 
+                            <GroupBox Header="강제 OCR 규칙 (텍스트 라벨 → 값 변환, 위에서부터 첫 일치 적용)">
+                                <StackPanel>
+                                    <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
+                                               Text="정규식 캡처 그룹을 출력의 $1,$2로 조합. 예: 'Lot No. 26070124 / SN. 14' → 26070124-14, '26070124-1' → 26070124-1"/>
+                                    <DataGrid x:Name="ForceRulesGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                                              Height="110" HeadersVisibility="Column" FontFamily="Consolas">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="90"/>
+                                            <DataGridTextColumn Header="패턴(정규식)" Binding="{Binding Pattern}" Width="*"/>
+                                            <DataGridTextColumn Header="출력" Binding="{Binding Output}" Width="60"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="규칙 추가" Click="AddForceRule_Click"/>
+                                        <Button Content="선택 삭제" Click="DelForceRule_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </GroupBox>
+
                             <GroupBox Header="데이터 추출 규칙">
                                 <StackPanel>
                                     <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
@@ -215,6 +239,9 @@
                         <Button Content="이미지 파일 검증" Click="VerifyFile_Click"/>
                         <Button Content="리포트 저장 (HTML+이미지)" Click="VerifyReport_Click"/>
                         <Button Content="세션 초기화" Click="VerifyClear_Click"/>
+                        <CheckBox x:Name="OverlayCheck" Content="문제영역 오버레이 표시" IsChecked="True"
+                                  VerticalAlignment="Center" Margin="10,0"
+                                  Checked="OverlayCheck_Toggled" Unchecked="OverlayCheck_Toggled"/>
                         <TextBlock x:Name="VerifyStatus" VerticalAlignment="Center" Margin="12,0"
                                    Text="※ 전용 검증기 없이 스캐너 이미지 기반의 ISO/IEC 15415 시뮬레이션 (경향 파악용)" Foreground="#FFB03A2E"/>
                     </WrapPanel>

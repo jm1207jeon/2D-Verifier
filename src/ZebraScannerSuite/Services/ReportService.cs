@@ -13,11 +13,13 @@ public static class ReportService
         string baseName = "VERIFY_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
         string htmlPath = Path.Combine(reportDir, baseName + ".html");
 
-        // 원본 이미지도 개별 PNG로 저장
+        // 원본 및 오버레이 이미지도 개별 PNG로 저장
         for (int i = 0; i < results.Count; i++)
         {
             if (results[i].ImagePng.Length > 0)
                 File.WriteAllBytes(Path.Combine(reportDir, $"{baseName}_{i + 1:00}.png"), results[i].ImagePng);
+            if (results[i].AnnotatedPng.Length > 0)
+                File.WriteAllBytes(Path.Combine(reportDir, $"{baseName}_{i + 1:00}_overlay.png"), results[i].AnnotatedPng);
         }
 
         File.WriteAllText(htmlPath, BuildHtml(results, scannerInfo), Encoding.UTF8);
@@ -63,8 +65,10 @@ public static class ReportService
             sb.Append($"<div class='measure'><h2>측정 #{idx} - {r.TimeText}</h2>");
             sb.Append($"<span class='overall g{r.OverallLetter}'>종합 등급: {r.OverallLetter} ({r.OverallNumeric:0.0})</span>");
             sb.Append($"<p><b>심볼로지:</b> {Html(r.Format)}<br><b>디코드 값:</b> <code>{Html(r.DecodedText)}</code></p>");
-            if (r.ImagePng.Length > 0)
-                sb.Append($"<img class='cap' src='data:image/png;base64,{Convert.ToBase64String(r.ImagePng)}'>");
+            var img = r.AnnotatedPng.Length > 0 ? r.AnnotatedPng : r.ImagePng;
+            if (img.Length > 0)
+                sb.Append($"<img class='cap' src='data:image/png;base64,{Convert.ToBase64String(img)}'>" +
+                          "<div class='meta'>(문제 영역 오버레이: 파랑=심볼 영역, 빨간 셀=저모듈레이션, 박스/선=파인더·클록 상태)</div>");
             sb.Append("<table><tr><th>파라미터</th><th>측정값</th><th>등급</th><th>비고</th></tr>");
             foreach (var p in r.Params)
             {
@@ -73,6 +77,12 @@ public static class ReportService
                 sb.Append($"<tr><td>{Html(p.Parameter)}</td><td>{Html(p.Value)}</td><td class='{cls}'>{grade}</td><td>{Html(p.Note)}</td></tr>");
             }
             sb.Append("</table>");
+            if (r.Recommendations.Count > 0)
+            {
+                sb.Append("<p><b>개선 권장사항</b></p><ul>");
+                foreach (var rec in r.Recommendations) sb.Append($"<li>{Html(rec)}</li>");
+                sb.Append("</ul>");
+            }
             if (r.Notes.Count > 0)
                 sb.Append("<ul class='meta'>" + string.Join("", r.Notes.Select(n => $"<li>{Html(n)}</li>")) + "</ul>");
             sb.Append("</div>");
