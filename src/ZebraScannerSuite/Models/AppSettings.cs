@@ -53,8 +53,11 @@ public class AppSettings
 
     public bool MultiAutoRetrigger { get; set; } = true;
 
-    /// <summary>강제 스캔(OCR) 모드 활성 상태 (F9)</summary>
-    public bool ForceOcrEnabled { get; set; }
+    /// <summary>강제 스캔 모드 활성 상태 (F9, 트리거=촬영)</summary>
+    public bool ForceScanEnabled { get; set; }
+
+    /// <summary>강제 스캔 시 OCR 수행 여부 (강제 스캔이 켜져 있을 때만 유효)</summary>
+    public bool ForceOcrEnabled { get; set; } = true;
 
     /// <summary>강제 OCR 변환 규칙 (위에서부터 순서대로 첫 일치 규칙 적용)</summary>
     public ObservableCollection<ForceOcrRule> ForceOcrRules { get; set; } = new()

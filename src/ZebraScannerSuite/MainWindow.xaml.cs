@@ -81,8 +81,8 @@ public partial class MainWindow : Window
         UpdateScannerStatus();
 
         // 강제 스캔 모드가 저장되어 있으면 스캐너 연결 후 재무장
-        if (ForceOcrCheck.IsChecked == true)
-            ForceOcr_Toggled(this, new RoutedEventArgs());
+        if (ForceScanCheck.IsChecked == true)
+            ForceScan_Toggled(this, new RoutedEventArgs());
     }
 
     private void InitScanner()
@@ -129,7 +129,8 @@ public partial class MainWindow : Window
         MultiRetriggerCheck.IsChecked = _settings.MultiAutoRetrigger;
         RulesGrid.ItemsSource = _settings.ExtractionRules;
         ForceRulesGrid.ItemsSource = _settings.ForceOcrRules;
-        ForceOcrCheck.IsChecked = _settings.ForceOcrEnabled;
+        ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
+        ForceOcrEnableCheck.IsChecked = _settings.ForceOcrEnabled;
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode == 1;
@@ -151,7 +152,8 @@ public partial class MainWindow : Window
             .Split('\n').Select(s => s.Trim('\r').Trim()).Where(s => s.Length > 0).ToList();
         _settings.CopyOcrToClipboard = CopyClipboardCheck.IsChecked == true;
         _settings.MultiAutoRetrigger = MultiRetriggerCheck.IsChecked == true;
-        _settings.ForceOcrEnabled = ForceOcrCheck.IsChecked == true;
+        _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
+        _settings.ForceOcrEnabled = ForceOcrEnableCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
         if (HostModeCombo.SelectedItem is ComboBoxItem { Tag: string code })
             _settings.PreferredHostMode = code;
@@ -292,8 +294,8 @@ public partial class MainWindow : Window
 
         ShowPreview(imageBytes);
 
-        // 강제 스캔(OCR) 모드: 촬영 이미지에서 바코드 → 텍스트 순으로 인식
-        if (!_awaitingScanImage && ForceOcrCheck.IsChecked == true && MainTabs.SelectedIndex == 0)
+        // 강제 스캔 모드: 촬영 이미지에서 바코드 → (옵션) 텍스트 순으로 인식
+        if (!_awaitingScanImage && ForceScanCheck.IsChecked == true && MainTabs.SelectedIndex == 0)
         {
             ProcessForceImage(imageBytes);
             return;
@@ -314,11 +316,14 @@ public partial class MainWindow : Window
 
         Enqueue(async () =>
         {
-            // 1) 이미지 저장
+            // 1) 이미지 저장 + 판독 품질(추정) 분석
             string path = ImageSaveService.Save(imageBytes, scan.Text, scan.Symbology, "", settingsSnapshot);
+            QuickQuality? quality = null;
+            try { using var qb = LoadBitmap(imageBytes); quality = Iso15415Verifier.QuickAssess(qb); } catch { }
             await Dispatcher.BeginInvoke(() =>
             {
                 if (record != null) { record.ImagePath = Path.GetFileName(path); HistoryList.Items.Refresh(); }
+                ShowQuality(quality);
                 SetStatus("이미지 저장 완료: " + path);
             });
 
@@ -348,10 +353,10 @@ public partial class MainWindow : Window
     // 대신 모드를 켜면(F9) 트리거 1회 = 촬영이 되고, 촬영 이미지에서
     // ① 소프트웨어 바코드 디코드(ZXing) 시도 → ② 실패 시 강제 OCR 규칙(유형1/2)으로 값 추출.
 
-    private void ForceOcr_Toggled(object sender, RoutedEventArgs e)
+    private void ForceScan_Toggled(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
-        bool on = ForceOcrCheck.IsChecked == true;
+        bool on = ForceScanCheck.IsChecked == true;
         if (_scanner?.ActiveScanner is not { } dev)
         {
             if (on) SetStatus("스캐너 미연결 - 강제 스캔 모드는 스캐너 연결 후 동작합니다.");
@@ -371,7 +376,7 @@ public partial class MainWindow : Window
     {
         if (e.Key == Key.F9)
         {
-            ForceOcrCheck.IsChecked = ForceOcrCheck.IsChecked != true;
+            ForceScanCheck.IsChecked = ForceScanCheck.IsChecked != true;
             e.Handled = true;
         }
     }
@@ -380,20 +385,27 @@ public partial class MainWindow : Window
     {
         CollectSettingsFromUi();
         var settingsSnapshot = _settings;
-        SetStatus("강제 스캔: 분석 중 (바코드 → 텍스트 순)...");
+        bool doOcr = ForceOcrEnableCheck.IsChecked == true;
+        SetStatus(doOcr ? "강제 스캔: 분석 중 (바코드 → 텍스트 순)..." : "강제 스캔: 분석 중 (바코드만)...");
 
         Enqueue(async () =>
         {
             // ① 소프트웨어 바코드 디코드 시도
             BarcodeData? sw = TrySoftwareDecode(bytes);
 
-            // ② OCR (강제 규칙 → 일반 허용 패턴 순)
-            string ocrText = "";
-            if (_ocr is { IsAvailable: true })
-                ocrText = await _ocr.RecognizeAsync(bytes);
-            string force = OcrService.ApplyForceRules(ocrText, settingsSnapshot.ForceOcrRules) ?? "";
-            if (force.Length == 0 && sw == null)
-                force = OcrService.FilterByPatterns(ocrText, settingsSnapshot.OcrPatterns).FirstOrDefault() ?? "";
+            // ② OCR (옵션: 강제 규칙 → 일반 허용 패턴 순)
+            string force = "";
+            if (doOcr && _ocr is { IsAvailable: true })
+            {
+                string ocrText = await _ocr.RecognizeAsync(bytes);
+                force = OcrService.ApplyForceRules(ocrText, settingsSnapshot.ForceOcrRules) ?? "";
+                if (force.Length == 0 && sw == null)
+                    force = OcrService.FilterByPatterns(ocrText, settingsSnapshot.OcrPatterns).FirstOrDefault() ?? "";
+            }
+
+            // 판독 품질(추정) 분석
+            QuickQuality? quality = null;
+            try { using var qb = LoadBitmap(bytes); quality = Iso15415Verifier.QuickAssess(qb); } catch { }
 
             // ③ 이미지 저장 ({BARCODE} 토큰 = 바코드값 또는 OCR값)
             string baseName = sw?.Text ?? (force.Length > 0 ? force : "NOCODE");
@@ -401,8 +413,8 @@ public partial class MainWindow : Window
 
             var record = new ScanRecord
             {
-                Barcode = sw?.Text ?? (force.Length > 0 ? force : "(텍스트 인식 실패)"),
-                Symbology = sw != null ? sw.Symbology + " (SW)" : "OCR",
+                Barcode = sw?.Text ?? (force.Length > 0 ? force : doOcr ? "(텍스트 인식 실패)" : "(촬영)"),
+                Symbology = sw != null ? sw.Symbology + " (SW)" : doOcr ? "OCR" : "IMAGE",
                 OcrValue = force,
                 ImagePath = Path.GetFileName(path),
             };
@@ -424,6 +436,7 @@ public partial class MainWindow : Window
                     _fields.Clear();
                 }
                 OcrResultText.Text = force;
+                ShowQuality(quality);
                 _history.Insert(0, record);
                 while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
                 if (force.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
@@ -432,7 +445,9 @@ public partial class MainWindow : Window
                     ? $"강제 스캔: 바코드 인식 ({sw.Symbology}) + 이미지 저장 완료"
                     : force.Length > 0
                         ? $"강제 스캔 OCR: {force} (이미지 저장 완료)"
-                        : "강제 스캔: 바코드/패턴 인식 실패 (이미지는 저장됨)");
+                        : doOcr
+                            ? "강제 스캔: 바코드/패턴 인식 실패 (이미지는 저장됨)"
+                            : "강제 스캔: 촬영/저장 완료 (OCR 꺼짐)");
             });
 
             RearmForceCapture();
@@ -461,7 +476,7 @@ public partial class MainWindow : Window
     private void RearmForceCapture()
     {
         if (_scanner?.ActiveScanner is not { } dev) return;
-        bool on = Dispatcher.Invoke(() => ForceOcrCheck.IsChecked == true && MainTabs.SelectedIndex == 0);
+        bool on = Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true && MainTabs.SelectedIndex == 0);
         if (!on) return;
         Task.Run(() =>
         {
@@ -476,6 +491,19 @@ public partial class MainWindow : Window
     private void DelForceRule_Click(object sender, RoutedEventArgs e)
     {
         if (ForceRulesGrid.SelectedItem is ForceOcrRule r) _settings.ForceOcrRules.Remove(r);
+    }
+
+    /// <summary>판독 품질(추정) 표시: 대비/초점/결손셀 - 색상으로 양호(녹)/주의(주황)/불량(빨강)</summary>
+    private void ShowQuality(QuickQuality? q)
+    {
+        if (q == null) { QualityText.Text = ""; return; }
+        QualityText.Text = "판독 품질(추정): " + q.Summary;
+        QualityText.Foreground = q.Level switch
+        {
+            0 => System.Windows.Media.Brushes.ForestGreen,
+            1 => System.Windows.Media.Brushes.DarkOrange,
+            _ => System.Windows.Media.Brushes.Red,
+        };
     }
 
     private void ShowPreview(byte[] bytes)
@@ -516,6 +544,7 @@ public partial class MainWindow : Window
         BarcodeText.Text = "";
         SymbologyText.Text = "-";
         OcrResultText.Text = "";
+        QualityText.Text = "";
         _fields.Clear();
         PreviewImage.Source = null;
         _lastImageBytes = null;

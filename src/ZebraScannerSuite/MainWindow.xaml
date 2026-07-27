@@ -60,11 +60,15 @@
                                              Checked="Mode_Changed" VerticalAlignment="Center"/>
                                 <RadioButton x:Name="ModeBarcodeImageOcr" Content="③ 바코드 + 이미지 + OCR 입력" Margin="4,4,14,4"
                                              Checked="Mode_Changed" VerticalAlignment="Center"/>
-                                <CheckBox x:Name="ForceOcrCheck" Margin="4,4,14,4" VerticalAlignment="Center"
+                                <CheckBox x:Name="ForceScanCheck" Margin="4,4,6,4" VerticalAlignment="Center"
                                           Foreground="#FFB03A2E" FontWeight="Bold"
-                                          Content="강제 스캔 OCR (F9): 트리거=촬영 → 바코드 없으면 텍스트 인식"
-                                          Checked="ForceOcr_Toggled" Unchecked="ForceOcr_Toggled"
-                                          ToolTip="바코드가 없는 텍스트 라벨용. 켜면 트리거를 당길 때마다 사진을 촬영해 바코드를 먼저 찾고, 없으면 강제 OCR 규칙(Lot+SN 등)으로 값을 추출합니다."/>
+                                          Content="강제 스캔 (F9): 트리거=촬영"
+                                          Checked="ForceScan_Toggled" Unchecked="ForceScan_Toggled"
+                                          ToolTip="켜면 트리거를 당길 때마다 사진을 촬영해 소프트웨어로 바코드를 인식하고 이미지를 저장합니다."/>
+                                <CheckBox x:Name="ForceOcrEnableCheck" Margin="0,4,14,4" VerticalAlignment="Center"
+                                          Content="+ OCR 수행"
+                                          IsEnabled="{Binding IsChecked, ElementName=ForceScanCheck}"
+                                          ToolTip="강제 스캔 시 바코드가 없으면 강제 OCR 규칙(Lot+SN 등)으로 텍스트 값을 추출합니다. 강제 스캔이 꺼져 있으면 사용할 수 없습니다."/>
                                 <Separator Width="12" Visibility="Hidden"/>
                                 <TextBlock Text="호스트 모드:" VerticalAlignment="Center" Margin="8,0,4,0"/>
                                 <ComboBox x:Name="HostModeCombo" Width="215" VerticalAlignment="Center"/>
@@ -89,6 +93,8 @@
                                                  KeyDown="HidInputBox_KeyDown"
                                                  ToolTip="스캐너가 HID 키보드 모드일 때 이 칸에 포커스를 두고 스캔하면 동일하게 처리됩니다 (Enter 종료 문자 필요)"/>
                                     </DockPanel>
+                                    <TextBlock x:Name="QualityText" FontSize="12" FontWeight="Bold" Margin="0,4,0,0"
+                                               ToolTip="DS9908(SNAPI)은 스캔별 품질 수치를 호스트로 제공하지 않으므로, 촬영된 이미지를 프로그램이 분석한 추정치입니다. 이미지가 캡처되는 모드(②/③/강제 스캔)에서 표시됩니다. 흐림·부분 지워짐·가는 공백 선(보이드) 등이 반영됩니다."/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Margin="8,0,0,0">
                                     <TextBlock x:Name="SymbologyText" Text="-" FontSize="14" FontWeight="Bold"

@@ -8,6 +8,20 @@ using ZebraScannerSuite.Models;
 namespace ZebraScannerSuite.Services;
 
 /// <summary>
+/// 스캔 직후 표시용 퀵 품질 지표 (스캐너 자체 품질값 미제공에 대한 대체 - 캡처 이미지 분석).
+/// 흐림(초점), 낮은 대비, 부분 지워짐/보이드/가는 공백 선(저모듈 셀)을 감지한다.
+/// </summary>
+public sealed class QuickQuality
+{
+    public double ContrastPct { get; set; }
+    public double Sharpness { get; set; }
+    public double LowModPercent { get; set; }
+    /// <summary>0=양호, 1=주의, 2=불량</summary>
+    public int Level { get; set; }
+    public string Summary { get; set; } = "";
+}
+
+/// <summary>
 /// ISO/IEC 15415 기반 2D 바코드 품질 "시뮬레이션" 검증기.
 ///
 /// [중요] 본 검증은 전용 검증기(Verifier) 하드웨어 없이 일반 스캐너(DS9908)의
@@ -188,6 +202,67 @@ public static class Iso15415Verifier
     {
         Parameter = name, Value = value, Numeric = numeric, Letter = ParamGrade.ToLetter(numeric), Note = note,
     };
+
+    // ---------------- 퀵 품질 평가 (스캔 직후 표시용, 수십 ms) ----------------
+
+    /// <summary>캡처 이미지 중앙 영역을 빠르게 분석해 대비/초점/결손 셀 비율을 산출.
+    /// DS9908(SNAPI)은 스캔별 품질값을 호스트로 주지 않으므로 이것이 대체 지표가 된다.</summary>
+    public static QuickQuality QuickAssess(Bitmap bmp)
+    {
+        byte[] g = ToGray(bmp, out int stride);
+        int w = bmp.Width, h = bmp.Height;
+        var box = new RectangleF(w * 0.15f, h * 0.15f, w * 0.7f, h * 0.7f);
+
+        var (lo, hi) = Percentiles(g, stride, box, 0.02, 0.98);
+        double contrast = (hi - lo) / 2.55; // 0~100%
+        double gt = (lo + hi) / 2.0;
+
+        // 초점/흐림: 라플라시안 분산
+        double sum = 0, sum2 = 0; long n = 0;
+        for (int y = (int)box.Top + 1; y < (int)box.Bottom - 1; y += 2)
+            for (int x = (int)box.Left + 1; x < (int)box.Right - 1; x += 2)
+            {
+                int i = y * stride + x;
+                double lap = 4.0 * g[i] - g[i - 1] - g[i + 1] - g[i - stride] - g[i + stride];
+                sum += lap; sum2 += lap * lap; n++;
+            }
+        double mean = n > 0 ? sum / n : 0;
+        double sharp = n > 0 ? sum2 / n - mean * mean : 0;
+
+        // 결손/번짐 셀 비율: 부분 지워짐·보이드·가는 공백 선이 저모듈레이션 셀로 나타남
+        double lowPct = 0;
+        double px = EstimatePitch(g, stride, box, gt, true);
+        double py = EstimatePitch(g, stride, box, gt, false);
+        double pitch = (px + py) / 2;
+        if (pitch >= 1.5 && hi > lo)
+        {
+            int total = 0, low = 0;
+            for (double cy = box.Top + pitch / 2; cy < box.Bottom - 1; cy += pitch)
+                for (double cx = box.Left + pitch / 2; cx < box.Right - 1; cx += pitch)
+                {
+                    double v = SampleMean(g, stride, (int)cx, (int)cy);
+                    double m = Math.Min(1.0, 2.0 * Math.Abs(v - gt) / (hi - lo));
+                    total++;
+                    if (m < 0.30) low++;
+                }
+            if (total > 0) lowPct = 100.0 * low / total;
+        }
+
+        int level = 0;
+        if (contrast < 40 || sharp < 60 || lowPct > 15) level = 2;
+        else if (contrast < 55 || sharp < 150 || lowPct > 7) level = 1;
+
+        string sharpTxt = sharp >= 150 ? "선명" : sharp >= 60 ? "보통(약간 흐림)" : "흐림 - 초점/거리 조정 필요";
+        string levelTxt = level == 0 ? "[양호]" : level == 1 ? "[주의]" : "[불량]";
+        return new QuickQuality
+        {
+            ContrastPct = contrast,
+            Sharpness = sharp,
+            LowModPercent = lowPct,
+            Level = level,
+            Summary = $"{levelTxt} 대비 {contrast:0}% · 초점 {sharpTxt} · 결손/번짐 셀 {lowPct:0.0}%",
+        };
+    }
 
     // ---------------- 개선 권장사항 ----------------
 
