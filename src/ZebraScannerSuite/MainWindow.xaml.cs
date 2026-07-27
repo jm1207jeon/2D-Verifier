@@ -39,6 +39,9 @@ public partial class MainWindow : Window
     private bool _selecting;
     private Rect _selectionUi = Rect.Empty;
 
+    // 강제 스캔: 하드웨어 디코더 재시도 대기용
+    private TaskCompletionSource<BarcodeData>? _forceDecodeTcs;
+
     // Tab2 상태
     private readonly ObservableCollection<ParamGrade> _verifyParams = new();
     private readonly ObservableCollection<VerificationResult> _verifySession = new();
@@ -208,6 +211,9 @@ public partial class MainWindow : Window
 
     private void OnBarcode(BarcodeData b)
     {
+        // 강제 스캔의 하드웨어 재판독 대기 중이면 해당 흐름으로 전달
+        if (_forceDecodeTcs != null && _forceDecodeTcs.TrySetResult(b)) return;
+
         if (MainTabs.SelectedIndex == 2)
         {
             if (_multiRunning)
@@ -390,8 +396,17 @@ public partial class MainWindow : Window
 
         Enqueue(async () =>
         {
-            // ① 소프트웨어 바코드 디코드 시도
+            // ① 소프트웨어 바코드 디코드 시도 (촬영된 프레임 그대로 즉시 분석)
             BarcodeData? sw = TrySoftwareDecode(bytes);
+
+            // ①-2 실패 시 스캐너 하드웨어 디코더로 자동 재판독
+            //     (디코드 모드 전환 → SDK 트리거 → 최대 0.9초 대기 → 복귀)
+            //     → 바코드 인식 능력이 일반 스캔 모드와 동일해진다
+            if (sw == null && _scanner?.ActiveScanner is { } hwDev)
+            {
+                await Dispatcher.BeginInvoke(() => SetStatus("강제 스캔: 하드웨어 디코더로 재판독 중..."));
+                sw = await TryHardwareDecodeAsync(hwDev.Id);
+            }
 
             // ② OCR (옵션: 강제 규칙 → 일반 허용 패턴 순)
             string force = "";
@@ -414,7 +429,7 @@ public partial class MainWindow : Window
             var record = new ScanRecord
             {
                 Barcode = sw?.Text ?? (force.Length > 0 ? force : doOcr ? "(텍스트 인식 실패)" : "(촬영)"),
-                Symbology = sw != null ? sw.Symbology + " (SW)" : doOcr ? "OCR" : "IMAGE",
+                Symbology = sw?.Symbology ?? (doOcr ? "OCR" : "IMAGE"),
                 OcrValue = force,
                 ImagePath = Path.GetFileName(path),
             };
@@ -424,7 +439,7 @@ public partial class MainWindow : Window
                 if (sw != null)
                 {
                     BarcodeText.Text = sw.Text;
-                    SymbologyText.Text = sw.Symbology + " (SW)";
+                    SymbologyText.Text = sw.Symbology;
                     _fields.Clear();
                     foreach (var f in DataExtractionService.Apply(sw.Text, settingsSnapshot.ExtractionRules))
                         _fields.Add(f);
@@ -463,9 +478,33 @@ public partial class MainWindow : Window
             using var bmp = LoadBitmap(bytes);
             var d = SoftwareDecoder.Decode(bmp);
             if (d == null) return null;
-            return new BarcodeData { Text = d.Value.Text, Symbology = d.Value.Format, Time = DateTime.Now };
+            return new BarcodeData { Text = d.Value.Text, Symbology = d.Value.Format + " (SW)", Time = DateTime.Now };
         }
         catch { return null; }
+    }
+
+    /// <summary>강제 스캔 중 하드웨어 디코더 재판독:
+    /// 디코드 모드 전환 → SDK 트리거 → 바코드 이벤트 대기(타임아웃) → 트리거 해제.
+    /// 촬영 모드 복귀는 이후 RearmForceCapture()가 수행한다.</summary>
+    private async Task<BarcodeData?> TryHardwareDecodeAsync(int scannerId, int timeoutMs = 900)
+    {
+        if (_scanner == null) return null;
+        var tcs = new TaskCompletionSource<BarcodeData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _forceDecodeTcs = tcs;
+        try
+        {
+            _scanner.SetCaptureBarcodeMode(scannerId);
+            await Task.Delay(60);
+            _scanner.PullTrigger(scannerId);
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+            return done == tcs.Task ? tcs.Task.Result : null;
+        }
+        catch { return null; }
+        finally
+        {
+            _forceDecodeTcs = null;
+            try { _scanner.ReleaseTrigger(scannerId); } catch { }
+        }
     }
 
     /// <summary>강제 스캔 모드 유지: 이미지 수신 후 스캐너가 디코드 모드로 복귀하므로 다시 촬영 모드로 무장</summary>
