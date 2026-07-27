@@ -258,7 +258,7 @@ public partial class MainWindow : Window
         UpdateBusy();
         Task.Run(() =>
         {
-            Thread.Sleep(120); // 디코드 세션 종료 대기
+            Thread.Sleep(80); // 디코드 세션 종료 대기
             bool ok = _scanner!.CaptureImage(dev.Id);
             Interlocked.Decrement(ref _pendingJobs);
             Dispatcher.BeginInvoke(() =>
@@ -396,31 +396,40 @@ public partial class MainWindow : Window
 
         Enqueue(async () =>
         {
-            // ① 소프트웨어 바코드 디코드 시도 (촬영된 프레임 그대로 즉시 분석)
-            BarcodeData? sw = TrySoftwareDecode(bytes);
+            // OCR·품질 분석은 디코드와 병렬로 미리 시작 (대기시간 단축)
+            Task<string> ocrTask = doOcr && _ocr is { IsAvailable: true }
+                ? _ocr.RecognizeAsync(bytes)
+                : Task.FromResult("");
+            var qualityTask = Task.Run(() =>
+            {
+                try { using var qb = LoadBitmap(bytes); return Iso15415Verifier.QuickAssess(qb); }
+                catch { return (QuickQuality?)null; }
+            });
 
-            // ①-2 실패 시 스캐너 하드웨어 디코더로 자동 재판독
-            //     (디코드 모드 전환 → SDK 트리거 → 최대 0.9초 대기 → 복귀)
-            //     → 바코드 인식 능력이 일반 스캔 모드와 동일해진다
+            // ① 고속 소프트웨어 디코드 (~수십 ms)
+            BarcodeData? sw = TrySoftwareDecode(bytes, thorough: false);
+
+            // ② 실패 시 하드웨어 디코더 재판독 (최대 0.6초) - 일반 스캔과 동일 성능
             if (sw == null && _scanner?.ActiveScanner is { } hwDev)
             {
                 await Dispatcher.BeginInvoke(() => SetStatus("강제 스캔: 하드웨어 디코더로 재판독 중..."));
                 sw = await TryHardwareDecodeAsync(hwDev.Id);
             }
 
-            // ② OCR (옵션: 강제 규칙 → 일반 허용 패턴 순)
+            // ③ 마지막으로 정밀 소프트웨어 디코드 (TryHarder+대비보정)
+            sw ??= TrySoftwareDecode(bytes, thorough: true);
+
+            // ④ OCR 결과 취합 (이미 병렬로 돌고 있었음)
             string force = "";
-            if (doOcr && _ocr is { IsAvailable: true })
+            if (doOcr)
             {
-                string ocrText = await _ocr.RecognizeAsync(bytes);
+                string ocrText = await ocrTask;
                 force = OcrService.ApplyForceRules(ocrText, settingsSnapshot.ForceOcrRules) ?? "";
                 if (force.Length == 0 && sw == null)
                     force = OcrService.FilterByPatterns(ocrText, settingsSnapshot.OcrPatterns).FirstOrDefault() ?? "";
             }
 
-            // 판독 품질(추정) 분석
-            QuickQuality? quality = null;
-            try { using var qb = LoadBitmap(bytes); quality = Iso15415Verifier.QuickAssess(qb); } catch { }
+            QuickQuality? quality = await qualityTask;
 
             // ③ 이미지 저장 ({BARCODE} 토큰 = 바코드값 또는 OCR값)
             string baseName = sw?.Text ?? (force.Length > 0 ? force : "NOCODE");
@@ -471,12 +480,12 @@ public partial class MainWindow : Window
 
     /// <summary>촬영 이미지에서 ZXing으로 바코드 디코드 시도 (강제 스캔 모드용 폴백).
     /// 다단계 전처리(대비 스트레칭/확대)로 인식률을 높인다.</summary>
-    private static BarcodeData? TrySoftwareDecode(byte[] bytes)
+    private static BarcodeData? TrySoftwareDecode(byte[] bytes, bool thorough)
     {
         try
         {
             using var bmp = LoadBitmap(bytes);
-            var d = SoftwareDecoder.Decode(bmp);
+            var d = thorough ? SoftwareDecoder.DecodeThorough(bmp) : SoftwareDecoder.DecodeFast(bmp);
             if (d == null) return null;
             return new BarcodeData { Text = d.Value.Text, Symbology = d.Value.Format + " (SW)", Time = DateTime.Now };
         }
@@ -486,7 +495,7 @@ public partial class MainWindow : Window
     /// <summary>강제 스캔 중 하드웨어 디코더 재판독:
     /// 디코드 모드 전환 → SDK 트리거 → 바코드 이벤트 대기(타임아웃) → 트리거 해제.
     /// 촬영 모드 복귀는 이후 RearmForceCapture()가 수행한다.</summary>
-    private async Task<BarcodeData?> TryHardwareDecodeAsync(int scannerId, int timeoutMs = 900)
+    private async Task<BarcodeData?> TryHardwareDecodeAsync(int scannerId, int timeoutMs = 600)
     {
         if (_scanner == null) return null;
         var tcs = new TaskCompletionSource<BarcodeData>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -494,7 +503,7 @@ public partial class MainWindow : Window
         try
         {
             _scanner.SetCaptureBarcodeMode(scannerId);
-            await Task.Delay(60);
+            await Task.Delay(30);
             _scanner.PullTrigger(scannerId);
             var done = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
             return done == tcs.Task ? tcs.Task.Result : null;
@@ -515,7 +524,7 @@ public partial class MainWindow : Window
         if (!on) return;
         Task.Run(() =>
         {
-            Thread.Sleep(150);
+            Thread.Sleep(60);
             _scanner.SetCaptureImageMode(dev.Id);
         });
     }

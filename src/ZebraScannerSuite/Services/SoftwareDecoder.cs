@@ -11,47 +11,37 @@ namespace ZebraScannerSuite.Services;
 /// </summary>
 public static class SoftwareDecoder
 {
-    public static (string Text, string Format)? Decode(Bitmap src)
+    /// <summary>고속 1차 시도: TryHarder 없이 원본만 분석 (~수십 ms).
+    /// 선명한 바코드는 대부분 여기서 잡힌다.</summary>
+    public static (string Text, string Format)? DecodeFast(Bitmap src)
+    {
+        var reader = new ZXing.Windows.Compatibility.BarcodeReader
+        {
+            AutoRotate = false,
+            Options = new DecodingOptions { TryHarder = false, TryInverted = true },
+        };
+        var res = reader.Decode(src);
+        if (res == null || string.IsNullOrEmpty(res.Text)) return null;
+        return (res.Text, res.BarcodeFormat.ToString());
+    }
+
+    /// <summary>정밀 시도: TryHarder + 대비 스트레칭. 확대 재시도는 시간이 오래 걸려 제외
+    /// (하드웨어 디코더 재판독이 그 역할을 대신한다).</summary>
+    public static (string Text, string Format)? DecodeThorough(Bitmap src)
     {
         var reader = new ZXing.Windows.Compatibility.BarcodeReader
         {
             AutoRotate = true,
-            Options = new DecodingOptions
-            {
-                TryHarder = true,
-                TryInverted = true,
-            },
+            Options = new DecodingOptions { TryHarder = true, TryInverted = true },
         };
-
         var res = reader.Decode(src);
         if (res == null)
         {
             using var st = StretchContrast(src);
             res = reader.Decode(st);
         }
-        if (res == null)
-        {
-            using var up = Upscale(src, 2);
-            res = reader.Decode(up);
-        }
-        if (res == null)
-        {
-            using var up = Upscale(src, 2);
-            using var st = StretchContrast(up);
-            res = reader.Decode(st);
-        }
-
         if (res == null || string.IsNullOrEmpty(res.Text)) return null;
         return (res.Text, res.BarcodeFormat.ToString());
-    }
-
-    private static Bitmap Upscale(Bitmap src, int factor)
-    {
-        var bmp = new Bitmap(src.Width * factor, src.Height * factor, PixelFormat.Format24bppRgb);
-        using var g = Graphics.FromImage(bmp);
-        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-        g.DrawImage(src, 0, 0, bmp.Width, bmp.Height);
-        return bmp;
     }
 
     /// <summary>휘도 2%/98% 퍼센타일 대비 스트레칭 (저대비·흐린 인쇄 대응)</summary>

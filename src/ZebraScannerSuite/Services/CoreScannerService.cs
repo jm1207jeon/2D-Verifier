@@ -139,7 +139,7 @@ public sealed class CoreScannerService : IDisposable
     public bool CaptureImage(int scannerId)
     {
         if (!SetCaptureImageMode(scannerId)) return false;
-        Thread.Sleep(60); // 모드 전환 안정화
+        Thread.Sleep(40); // 모드 전환 안정화
         return PullTrigger(scannerId);
     }
 
