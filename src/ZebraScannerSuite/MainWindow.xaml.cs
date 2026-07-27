@@ -432,7 +432,7 @@ public partial class MainWindow : Window
                 else
                 {
                     BarcodeText.Text = force;
-                    SymbologyText.Text = "OCR";
+                    SymbologyText.Text = force.Length > 0 ? "OCR" : "인식 실패";
                     _fields.Clear();
                 }
                 OcrResultText.Text = force;
@@ -454,20 +454,16 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>촬영 이미지에서 ZXing으로 바코드 디코드 시도 (강제 스캔 모드용 폴백)</summary>
+    /// <summary>촬영 이미지에서 ZXing으로 바코드 디코드 시도 (강제 스캔 모드용 폴백).
+    /// 다단계 전처리(대비 스트레칭/확대)로 인식률을 높인다.</summary>
     private static BarcodeData? TrySoftwareDecode(byte[] bytes)
     {
         try
         {
             using var bmp = LoadBitmap(bytes);
-            var reader = new ZXing.Windows.Compatibility.BarcodeReader
-            {
-                AutoRotate = true,
-                Options = new ZXing.Common.DecodingOptions { TryHarder = true, TryInverted = true },
-            };
-            var res = reader.Decode(bmp);
-            if (res == null || string.IsNullOrEmpty(res.Text)) return null;
-            return new BarcodeData { Text = res.Text, Symbology = res.BarcodeFormat.ToString(), Time = DateTime.Now };
+            var d = SoftwareDecoder.Decode(bmp);
+            if (d == null) return null;
+            return new BarcodeData { Text = d.Value.Text, Symbology = d.Value.Format, Time = DateTime.Now };
         }
         catch { return null; }
     }
