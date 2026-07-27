@@ -49,7 +49,9 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
     private int _multiTotal;
     private bool _multiRunning;
-    private readonly DispatcherTimer _retriggerTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private int _repullInFlight;
+    // 하트비트: 즉시 재트리거가 놓친 경우를 대비한 보조 (실제 재트리거는 디코드 직후 40ms 내 수행)
+    private readonly DispatcherTimer _retriggerTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
 
     public MainWindow()
     {
@@ -206,7 +208,12 @@ public partial class MainWindow : Window
     {
         if (MainTabs.SelectedIndex == 2)
         {
-            if (_multiRunning) AddMultiScan(b);
+            if (_multiRunning)
+            {
+                AddMultiScan(b);
+                // 디코드 성공 시 세션이 종료되므로 즉시 재트리거 (최고 속도 연속 스캔)
+                RepullTriggerSoon();
+            }
             return;
         }
         if (MainTabs.SelectedIndex == 1) return; // Verify 탭은 캡처 버튼 기반
@@ -871,9 +878,29 @@ public partial class MainWindow : Window
 
     private void RetriggerTimer_Tick(object? sender, EventArgs e)
     {
-        // 핸드헬드형 디코드 세션 타임아웃 대비 재트리거 (DS9908 프레젠테이션 모드에서는 상시 감지)
+        // 하트비트 재트리거(0.5초): 디코드 세션 타임아웃/즉시 재트리거 누락 대비
+        // (DS9908 프레젠테이션 모드에서는 상시 감지되므로 보조 역할)
         if (_multiRunning && _scanner?.ActiveScanner is { } dev)
             _scanner.PullTrigger(dev.Id);
+    }
+
+    /// <summary>디코드 직후 즉시 트리거 재무장: release → 40ms → pull.
+    /// 연속 스캔 속도를 타이머 주기와 무관하게 최대화한다. (중복 호출은 1건으로 병합)</summary>
+    private void RepullTriggerSoon()
+    {
+        if (!_multiRunning || _scanner?.ActiveScanner is not { } dev) return;
+        if (Interlocked.Exchange(ref _repullInFlight, 1) == 1) return;
+        Task.Run(() =>
+        {
+            try
+            {
+                _scanner.ReleaseTrigger(dev.Id);
+                Thread.Sleep(40); // 세션 정리 최소 대기
+                if (_multiRunning) _scanner.PullTrigger(dev.Id);
+            }
+            catch { }
+            finally { Interlocked.Exchange(ref _repullInFlight, 0); }
+        });
     }
 
     private void AddMultiScan(BarcodeData b)
