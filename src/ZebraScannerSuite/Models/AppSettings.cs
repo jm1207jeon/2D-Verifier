@@ -53,6 +53,9 @@ public class AppSettings
 
     public bool MultiAutoRetrigger { get; set; } = true;
 
+    /// <summary>CoreScanner HID 키보드 에뮬레이터 끄기 (스캔 시 Caps Lock 토글/자동 타이핑 방지)</summary>
+    public bool DisableKeyboardEmulator { get; set; } = true;
+
     /// <summary>강제 스캔 모드 활성 상태 (F9, 트리거=촬영)</summary>
     public bool ForceScanEnabled { get; set; }
 

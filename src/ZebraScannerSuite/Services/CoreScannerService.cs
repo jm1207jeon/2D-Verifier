@@ -26,6 +26,7 @@ public sealed class CoreScannerService : IDisposable
     private const int DEVICE_CAPTURE_BARCODE= 3500;
     private const int SET_ACTION            = 6000;
     private const int DEVICE_SWITCH_HOST_MODE = 6200;
+    private const int KEYBOARD_EMULATOR_ENABLE = 6300;
 
     // ---- 호스트 모드 코드 (opcode 6200 arg-string) ----
     public static readonly (string Name, string Code)[] HostModes =
@@ -154,6 +155,16 @@ public sealed class CoreScannerService : IDisposable
             "</cmdArgs></inArgs>";
         var (status, _) = Exec(DEVICE_SWITCH_HOST_MODE, inXml);
         return status == 0;
+    }
+
+    /// <summary>CoreScanner 드라이버의 HID 키보드 에뮬레이터 켜기/끄기.
+    /// 에뮬레이터가 켜져 있으면 SNAPI 모드에서도 스캔 데이터를 키보드로 타이핑하며
+    /// 그 과정에서 Caps Lock을 켜고 끄는 현상이 발생한다. (API 설정은 CoreScanner
+    /// 서비스 재시작/재부팅 시 config.xml 값으로 복원되므로 앱 시작 시마다 적용)</summary>
+    public bool SetKeyboardEmulator(bool enable)
+    {
+        string inXml = $"<inArgs><cmdArgs><arg-bool>{(enable ? "TRUE" : "FALSE")}</arg-bool></cmdArgs></inArgs>";
+        return Exec(KEYBOARD_EMULATOR_ENABLE, inXml).status == 0;
     }
 
     /// <summary>비프/LED 액션 (actionCode: SDK 문서 참조, 예 1=짧은 고음 1회)</summary>

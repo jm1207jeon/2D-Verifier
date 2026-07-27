@@ -175,6 +175,16 @@
                                 </StackPanel>
                             </GroupBox>
 
+                            <GroupBox Header="장치 설정">
+                                <StackPanel>
+                                    <CheckBox x:Name="DisableKbdEmuCheck"
+                                              Content="키보드 에뮬레이터 끄기 (스캔 시 Caps Lock 토글 방지)"
+                                              Checked="KbdEmu_Toggled" Unchecked="KbdEmu_Toggled"/>
+                                    <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
+                                               Text="Zebra CoreScanner 드라이버의 HID 키보드 에뮬레이터가 스캔할 때마다 데이터를 키보드로 타이핑하면서 Caps Lock을 켜고 끄는 현상을 방지합니다. 본 프로그램은 SDK로 직접 데이터를 받으므로 에뮬레이터가 필요 없습니다. (해제 시 다시 타이핑 동작)"/>
+                                </StackPanel>
+                            </GroupBox>
+
                             <GroupBox Header="OCR 설정">
                                 <StackPanel>
                                     <TextBlock x:Name="OcrEngineText" FontSize="11" Foreground="Gray"/>

@@ -98,6 +98,16 @@ public partial class MainWindow : Window
             _scanner.DevicesChanged += () => Dispatcher.BeginInvoke(UpdateScannerStatus);
             _scanner.StatusMessage += m => Dispatcher.BeginInvoke(() => SetStatus(m));
             _scanner.Open();
+
+            // Caps Lock 토글의 원인인 CoreScanner HID 키보드 에뮬레이터 비활성화
+            // (API 설정은 서비스 재시작 시 초기화되므로 앱 시작 시마다 적용)
+            if (_settings.DisableKeyboardEmulator)
+            {
+                bool ok = _scanner.SetKeyboardEmulator(false);
+                Dispatcher.BeginInvoke(() => SetStatus(ok
+                    ? "키보드 에뮬레이터 비활성화 완료 (Caps Lock 토글 방지)"
+                    : "키보드 에뮬레이터 비활성화 실패 (구성요소 미설치 시 무시해도 됩니다)"));
+            }
         }
         catch (Exception ex)
         {
@@ -132,6 +142,7 @@ public partial class MainWindow : Window
         MultiRetriggerCheck.IsChecked = _settings.MultiAutoRetrigger;
         RulesGrid.ItemsSource = _settings.ExtractionRules;
         ForceRulesGrid.ItemsSource = _settings.ForceOcrRules;
+        DisableKbdEmuCheck.IsChecked = _settings.DisableKeyboardEmulator;
         ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
         ForceOcrEnableCheck.IsChecked = _settings.ForceOcrEnabled;
 
@@ -155,6 +166,7 @@ public partial class MainWindow : Window
             .Split('\n').Select(s => s.Trim('\r').Trim()).Where(s => s.Length > 0).ToList();
         _settings.CopyOcrToClipboard = CopyClipboardCheck.IsChecked == true;
         _settings.MultiAutoRetrigger = MultiRetriggerCheck.IsChecked == true;
+        _settings.DisableKeyboardEmulator = DisableKbdEmuCheck.IsChecked == true;
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
         _settings.ForceOcrEnabled = ForceOcrEnableCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
@@ -375,6 +387,19 @@ public partial class MainWindow : Window
                 ? (ok ? "강제 스캔 모드 ON - 트리거를 당기면 촬영 후 바코드/텍스트를 인식합니다."
                       : "강제 스캔 모드 전환 실패 - 'USB SNAPI (이미징 지원)' 모드인지 확인하세요.")
                 : "강제 스캔 모드 OFF - 일반 바코드 디코드 모드로 복귀"));
+        });
+    }
+
+    private void KbdEmu_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _scanner is not { IsOpen: true }) return;
+        bool disable = DisableKbdEmuCheck.IsChecked == true;
+        Task.Run(() =>
+        {
+            bool ok = _scanner.SetKeyboardEmulator(!disable);
+            Dispatcher.BeginInvoke(() => SetStatus(disable
+                ? (ok ? "키보드 에뮬레이터 껐습니다 - 스캔 시 Caps Lock을 건드리지 않습니다." : "키보드 에뮬레이터 끄기 실패")
+                : (ok ? "키보드 에뮬레이터 켰습니다 - 스캔 데이터가 키보드로 타이핑됩니다." : "키보드 에뮬레이터 켜기 실패")));
         });
     }
 
