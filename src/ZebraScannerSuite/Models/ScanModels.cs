@@ -45,38 +45,3 @@ public class MultiScanRow
     public int Count { get; set; } = 1;
 }
 
-/// <summary>ISO/IEC 15415 파라미터 등급 (시뮬레이션/추정치)</summary>
-public class ParamGrade
-{
-    public string Parameter { get; set; } = "";
-    public string Value { get; set; } = "";
-    /// <summary>4.0=A ... 0.0=F, -1 = N/A(등급 미포함)</summary>
-    public double Numeric { get; set; } = -1;
-    public string Letter { get; set; } = "-";
-    public string Note { get; set; } = "";
-
-    public static string ToLetter(double n) => n switch
-    {
-        >= 3.5 => "A", >= 2.5 => "B", >= 1.5 => "C", >= 0.5 => "D", >= 0 => "F", _ => "-"
-    };
-}
-
-public class VerificationResult
-{
-    public DateTime Time { get; set; } = DateTime.Now;
-    public bool Decoded { get; set; }
-    public string DecodedText { get; set; } = "";
-    public string Format { get; set; } = "";
-    public List<ParamGrade> Params { get; set; } = new();
-    public double OverallNumeric { get; set; }
-    public string OverallLetter { get; set; } = "F";
-    public List<string> Notes { get; set; } = new();
-    /// <summary>문제 영역이 강조된 오버레이 이미지 (심볼 영역/저모듈 셀/파인더 상태)</summary>
-    public byte[] AnnotatedPng { get; set; } = Array.Empty<byte>();
-    /// <summary>등급이 낮은 파라미터별 개선 권장사항</summary>
-    public List<string> Recommendations { get; set; } = new();
-    public byte[] ImagePng { get; set; } = Array.Empty<byte>();
-    public string TimeText => Time.ToString("yyyy-MM-dd HH:mm:ss");
-    public string Summary => $"{TimeText}  {OverallLetter} ({OverallNumeric:0.0})  {Format}  {Truncate(DecodedText, 30)}";
-    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…";
-}

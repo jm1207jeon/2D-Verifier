@@ -30,9 +30,6 @@ public class AppSettings
     public string ImageSaveDirectory { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "ZebraScans");
 
-    public string ReportDirectory { get; set; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ZebraVerifyReports");
-
     /// <summary>파일명 규칙. 토큰: {DATE:yyyyMMdd} {TIME:HHmmss} {BARCODE} {SYMBOLOGY} {SEQ:3} (### 도 {SEQ:3}으로 인식)</summary>
     public string FileNameRule { get; set; } = "{DATE:yyyyMMdd}_{BARCODE}_{SEQ:3}";
 

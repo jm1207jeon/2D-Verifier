@@ -1,12 +1,11 @@
 # Zebra DS9908 Scanner Suite
 
 Zebra **DS9908** 바코드 스캐너를 Windows PC에 연결해 사용하는 통합 프로그램입니다.
-바코드 리딩, 이미지 캡처, OCR 입력, ISO/IEC 15415 기반 검증 시뮬레이션, 연속(Multi) 스캔을 지원합니다.
+바코드 리딩, 이미지 캡처, OCR 입력, 연속(Multi) 스캔을 지원합니다.
 
 | 탭 | 기능 |
 |---|---|
 | **일반 스캔** | ① 바코드만 / ② 바코드+이미지 캡처 / ③ 바코드+이미지+OCR 입력 · 저장경로/파일명규칙 · 영역선택 OCR · GS1 데이터 추출 |
-| **BARCODE VERIFY** | ISO/IEC 15415 기반 품질 등급 시뮬레이션 + HTML 리포트 저장/출력 |
 | **Multi / Continuous** | 트리거 유지 상태로 시야 내 바코드를 연속·고속 리딩 (중복 자동 제거, CSV 내보내기) |
 
 ---
@@ -84,33 +83,7 @@ dotnet publish src/ZebraScannerSuite -c Release -r win-x64 --self-contained fals
     - 유형2: `26070124-11` / `26070124-1` → 그대로 출력
   - 규칙은 정규식 캡처그룹($1,$2)으로 자유롭게 추가/수정할 수 있습니다.
 
-### 탭 2 — BARCODE VERIFY (ISO/IEC 15415 시뮬레이션)
-
-전용 검증기 하드웨어 없이 DS9908의 이미저 캡처와 알고리즘 로직으로 **가능한 범위까지** ISO/IEC 15415 파라미터를 근사 산출합니다.
-
-| 파라미터 | 산출 방법 |
-|---|---|
-| Decode | 캡처 이미지 디코드 성공 여부 (ZXing) |
-| Symbol Contrast (SC) | 심볼 영역 반사율 히스토그램 Rmin/Rmax |
-| Modulation (MOD) | 모듈 격자 샘플링 기반 추정 |
-| Axial Nonuniformity (AN) | X/Y 모듈 피치 비교 |
-| Grid Nonuniformity (GN) | 국부(사분면) 피치 편차 근사 |
-| Unused Error Correction (UEC) | 디코더 오류정정 통계 기반 근사 |
-| Fixed Pattern Damage (FPD) | QR 파인더 / DataMatrix L-파인더·클록트랙 샘플링 |
-
-- 종합 등급 = 파라미터 중 **최저 등급** (ISO 15415 방식, A~F / 4.0~0.0)
-- **문제 영역 오버레이**: 검증 이미지 위에 심볼 영역(파랑), 저모듈레이션 셀(빨강),
-  QR 파인더 패턴 상태(녹색/주황/빨강 박스), DataMatrix L-파인더·클록트랙(선)을 표시해
-  어느 부위가 문제인지 바로 확인할 수 있습니다.
-- **개선 권장사항**: 등급이 C 이하인 파라미터별로 원인·개선 방법(잉크 농도, 도트게인,
-  X/Y 배율 보정, Quiet Zone 확보 등)을 자동으로 안내합니다. 리포트에도 포함됩니다.
-- 측정 결과는 세션에 누적되며 **[리포트 저장]** 으로 캡처 이미지 포함 **HTML 리포트**(+원본/오버레이 PNG)로 저장됩니다.
-  브라우저에서 열어 인쇄하거나 PDF로 저장할 수 있습니다.
-
-> **고지**: ISO 15415는 교정된 조명(45°/0°)·개구·반사율 기준을 요구합니다. 본 결과는 공식 성적이 아닌
-> **대략적인 경향 파악(사전 준비)용 시뮬레이션**입니다.
-
-### 탭 3 — Multi / Continuous
+### 탭 2 — Multi / Continuous
 
 - **[시작]** 을 누르면 트리거를 당긴 상태(SDK 트리거 유지 + 자동 재트리거)로 시야에 들어오는 바코드를
   최대한 빠르게 연속 리딩합니다.
@@ -138,8 +111,6 @@ src/ZebraScannerSuite/
  ├─ Services/
  │   ├─ CoreScannerService.cs # Zebra CoreScanner COM 연동 (이벤트/트리거/캡처/모드전환)
  │   ├─ OcrService.cs         # Windows 내장 OCR + 패턴 필터
- │   ├─ Iso15415Verifier.cs   # ISO 15415 시뮬레이션 등급 산출
- │   ├─ ReportService.cs      # HTML 검증 리포트
  │   ├─ Gs1Parser.cs          # GS1 응용식별자 파서
  │   ├─ DataExtractionService.cs
  │   ├─ ImageSaveService.cs   # 파일명 규칙/일련번호

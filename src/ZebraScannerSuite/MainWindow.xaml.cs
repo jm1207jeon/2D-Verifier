@@ -42,12 +42,7 @@ public partial class MainWindow : Window
     // 강제 스캔: 하드웨어 디코더 재시도 대기용
     private TaskCompletionSource<BarcodeData>? _forceDecodeTcs;
 
-    // Tab2 상태
-    private readonly ObservableCollection<ParamGrade> _verifyParams = new();
-    private readonly ObservableCollection<VerificationResult> _verifySession = new();
-    private bool _awaitingVerifyImage;
-
-    // Tab3 상태
+    // Multi 탭 상태
     private readonly ObservableCollection<MultiScanRow> _multiRows = new();
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
     private int _multiTotal;
@@ -61,8 +56,6 @@ public partial class MainWindow : Window
         InitializeComponent();
         FieldsGrid.ItemsSource = _fields;
         HistoryList.ItemsSource = _history;
-        VerifyGrid.ItemsSource = _verifyParams;
-        VerifySessionList.ItemsSource = _verifySession;
         MultiGrid.ItemsSource = _multiRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
         _retriggerTimer.Tick += RetriggerTimer_Tick;
@@ -83,9 +76,9 @@ public partial class MainWindow : Window
         await Task.Run(InitScanner);
         UpdateScannerStatus();
 
-        // 강제 스캔 모드가 저장되어 있으면 스캐너 연결 후 재무장
-        if (ForceScanCheck.IsChecked == true)
-            ForceScan_Toggled(this, new RoutedEventArgs());
+        // 시작 시 스캐너 동작 모드 보장 (재시도 포함):
+        // 이전 세션에서 촬영 모드로 남아 있던 상태 복구 + 강제 스캔 설정 재무장
+        EnsureScannerMode("초기화");
     }
 
     private void InitScanner()
@@ -95,19 +88,14 @@ public partial class MainWindow : Window
             _scanner = new CoreScannerService();
             _scanner.BarcodeScanned += b => Dispatcher.BeginInvoke(() => OnBarcode(b));
             _scanner.ImageCaptured += img => Dispatcher.BeginInvoke(() => OnImage(img));
-            _scanner.DevicesChanged += () => Dispatcher.BeginInvoke(UpdateScannerStatus);
+            _scanner.DevicesChanged += () => Dispatcher.BeginInvoke(() =>
+            {
+                UpdateScannerStatus();
+                // 재연결(모드 전환/재플러그) 시 동작 모드·키보드 에뮬레이터 설정 재적용
+                if (_scanner?.Scanners.Count > 0) EnsureScannerMode("스캐너 재연결");
+            });
             _scanner.StatusMessage += m => Dispatcher.BeginInvoke(() => SetStatus(m));
             _scanner.Open();
-
-            // Caps Lock 토글의 원인인 CoreScanner HID 키보드 에뮬레이터 비활성화
-            // (API 설정은 서비스 재시작 시 초기화되므로 앱 시작 시마다 적용)
-            if (_settings.DisableKeyboardEmulator)
-            {
-                bool ok = _scanner.SetKeyboardEmulator(false);
-                Dispatcher.BeginInvoke(() => SetStatus(ok
-                    ? "키보드 에뮬레이터 비활성화 완료 (Caps Lock 토글 방지)"
-                    : "키보드 에뮬레이터 비활성화 실패 (구성요소 미설치 시 무시해도 됩니다)"));
-            }
         }
         catch (Exception ex)
         {
@@ -127,7 +115,12 @@ public partial class MainWindow : Window
         catch { }
         try
         {
-            if (_multiRunning && _scanner?.ActiveScanner is { } s) _scanner.ReleaseTrigger(s.Id);
+            if (_scanner?.ActiveScanner is { } s)
+            {
+                if (_multiRunning) _scanner.ReleaseTrigger(s.Id);
+                // 촬영 모드로 남겨두면 다음 실행/다른 프로그램에서 스캔이 안 되므로 디코드 모드로 복원
+                _scanner.SetCaptureBarcodeMode(s.Id);
+            }
             _scanner?.Dispose();
         }
         catch { }
@@ -226,7 +219,7 @@ public partial class MainWindow : Window
         // 강제 스캔의 하드웨어 재판독 대기 중이면 해당 흐름으로 전달
         if (_forceDecodeTcs != null && _forceDecodeTcs.TrySetResult(b)) return;
 
-        if (MainTabs.SelectedIndex == 2)
+        if (MainTabs.SelectedIndex == 1) // Multi / Continuous 탭
         {
             if (_multiRunning)
             {
@@ -236,7 +229,6 @@ public partial class MainWindow : Window
             }
             return;
         }
-        if (MainTabs.SelectedIndex == 1) return; // Verify 탭은 캡처 버튼 기반
         HandleScanTab(b);
     }
 
@@ -289,10 +281,9 @@ public partial class MainWindow : Window
     private void ImageTimeout_Tick(object? sender, EventArgs e)
     {
         _imageTimeout.Stop();
-        if (_awaitingScanImage || _awaitingVerifyImage)
+        if (_awaitingScanImage)
         {
             _awaitingScanImage = false;
-            _awaitingVerifyImage = false;
             if (_scanner?.ActiveScanner is { } d) _scanner.ReleaseTrigger(d.Id);
             SetStatus("이미지 수신 시간 초과 - SNAPI(이미징) 모드 및 연결 상태를 확인하세요.");
         }
@@ -302,13 +293,6 @@ public partial class MainWindow : Window
     {
         if (_scanner?.ActiveScanner is { } d) _scanner.ReleaseTrigger(d.Id);
         _imageTimeout.Stop();
-
-        if (_awaitingVerifyImage)
-        {
-            _awaitingVerifyImage = false;
-            RunVerification(imageBytes);
-            return;
-        }
 
         ShowPreview(imageBytes);
 
@@ -334,14 +318,11 @@ public partial class MainWindow : Window
 
         Enqueue(async () =>
         {
-            // 1) 이미지 저장 + 판독 품질(추정) 분석
+            // 1) 이미지 저장
             string path = ImageSaveService.Save(imageBytes, scan.Text, scan.Symbology, "", settingsSnapshot);
-            QuickQuality? quality = null;
-            try { using var qb = LoadBitmap(imageBytes); quality = Iso15415Verifier.QuickAssess(qb); } catch { }
             await Dispatcher.BeginInvoke(() =>
             {
                 if (record != null) { record.ImagePath = Path.GetFileName(path); HistoryList.Items.Refresh(); }
-                ShowQuality(quality);
                 SetStatus("이미지 저장 완료: " + path);
             });
 
@@ -374,19 +355,54 @@ public partial class MainWindow : Window
     private void ForceScan_Toggled(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
-        bool on = ForceScanCheck.IsChecked == true;
-        if (_scanner?.ActiveScanner is not { } dev)
+        if (_scanner is not { IsOpen: true })
         {
-            if (on) SetStatus("스캐너 미연결 - 강제 스캔 모드는 스캐너 연결 후 동작합니다.");
+            if (ForceScanCheck.IsChecked == true)
+                SetStatus("스캐너 미연결 - 강제 스캔 모드는 스캐너 연결 후 동작합니다.");
             return;
         }
+        EnsureScannerMode(ForceScanCheck.IsChecked == true ? "강제 스캔 ON" : "강제 스캔 OFF");
+    }
+
+    /// <summary>스캐너 동작 모드를 현재 UI 설정에 맞게 보장한다 (최대 5회 재시도).
+    /// - 강제 스캔 ON → 촬영 모드 / OFF → 디코드 모드로 확정
+    /// - 이전 세션이 촬영 모드로 남긴 상태, 시작·재연결 직후 명령 실패를 복구
+    /// - 키보드 에뮬레이터(Caps Lock 토글 원인)도 설정에 따라 재적용</summary>
+    private void EnsureScannerMode(string reason)
+    {
+        if (_scanner is not { IsOpen: true }) return;
+        bool forceScan = Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true);
+        bool disableKbd = Dispatcher.Invoke(() => DisableKbdEmuCheck.IsChecked == true);
         Task.Run(() =>
         {
-            bool ok = on ? _scanner.SetCaptureImageMode(dev.Id) : _scanner.SetCaptureBarcodeMode(dev.Id);
-            Dispatcher.BeginInvoke(() => SetStatus(on
-                ? (ok ? "강제 스캔 모드 ON - 트리거를 당기면 촬영 후 바코드/텍스트를 인식합니다."
-                      : "강제 스캔 모드 전환 실패 - 'USB SNAPI (이미징 지원)' 모드인지 확인하세요.")
-                : "강제 스캔 모드 OFF - 일반 바코드 디코드 모드로 복귀"));
+            for (int attempt = 1; attempt <= 5; attempt++)
+            {
+                var dev = _scanner.ActiveScanner;
+                if (dev == null)
+                {
+                    Thread.Sleep(700);
+                    _scanner.RefreshScanners();
+                    continue;
+                }
+                try
+                {
+                    if (disableKbd) _scanner.SetKeyboardEmulator(false);
+                    _scanner.ScanEnable(dev.Id);
+                    bool ok = forceScan
+                        ? _scanner.SetCaptureImageMode(dev.Id)
+                        : _scanner.SetCaptureBarcodeMode(dev.Id);
+                    if (ok)
+                    {
+                        Dispatcher.BeginInvoke(() => SetStatus(
+                            $"{reason}: {(forceScan ? "강제 스캔(트리거=촬영) 모드" : "바코드 디코드 모드")} 준비 완료"));
+                        return;
+                    }
+                }
+                catch { }
+                Thread.Sleep(700);
+            }
+            Dispatcher.BeginInvoke(() => SetStatus(
+                $"{reason}: 스캐너 모드 설정 실패 - USB 재연결 후 [스캐너 새로고침]을 눌러주세요."));
         });
     }
 
@@ -425,12 +441,6 @@ public partial class MainWindow : Window
             Task<string> ocrTask = doOcr && _ocr is { IsAvailable: true }
                 ? _ocr.RecognizeAsync(bytes)
                 : Task.FromResult("");
-            var qualityTask = Task.Run(() =>
-            {
-                try { using var qb = LoadBitmap(bytes); return Iso15415Verifier.QuickAssess(qb); }
-                catch { return (QuickQuality?)null; }
-            });
-
             // ① 고속 소프트웨어 디코드 (~수십 ms)
             BarcodeData? sw = TrySoftwareDecode(bytes, thorough: false);
 
@@ -454,7 +464,6 @@ public partial class MainWindow : Window
                     force = OcrService.FilterByPatterns(ocrText, settingsSnapshot.OcrPatterns).FirstOrDefault() ?? "";
             }
 
-            QuickQuality? quality = await qualityTask;
 
             // ③ 이미지 저장 ({BARCODE} 토큰 = 바코드값 또는 OCR값)
             string baseName = sw?.Text ?? (force.Length > 0 ? force : "NOCODE");
@@ -485,7 +494,6 @@ public partial class MainWindow : Window
                     _fields.Clear();
                 }
                 OcrResultText.Text = force;
-                ShowQuality(quality);
                 _history.Insert(0, record);
                 while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
                 if (force.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
@@ -562,19 +570,6 @@ public partial class MainWindow : Window
         if (ForceRulesGrid.SelectedItem is ForceOcrRule r) _settings.ForceOcrRules.Remove(r);
     }
 
-    /// <summary>판독 품질(추정) 표시: 대비/초점/결손셀 - 색상으로 양호(녹)/주의(주황)/불량(빨강)</summary>
-    private void ShowQuality(QuickQuality? q)
-    {
-        if (q == null) { QualityText.Text = ""; return; }
-        QualityText.Text = "판독 품질(추정): " + q.Summary;
-        QualityText.Foreground = q.Level switch
-        {
-            0 => System.Windows.Media.Brushes.ForestGreen,
-            1 => System.Windows.Media.Brushes.DarkOrange,
-            _ => System.Windows.Media.Brushes.Red,
-        };
-    }
-
     private void ShowPreview(byte[] bytes)
     {
         _lastImageBytes = bytes;
@@ -613,7 +608,6 @@ public partial class MainWindow : Window
         BarcodeText.Text = "";
         SymbologyText.Text = "-";
         OcrResultText.Text = "";
-        QualityText.Text = "";
         _fields.Clear();
         PreviewImage.Source = null;
         _lastImageBytes = null;
@@ -808,146 +802,7 @@ public partial class MainWindow : Window
         return new DrawingBitmap(tmp); // 스트림 분리 복사본
     }
 
-    // ==================== Tab2 : BARCODE VERIFY ====================
-
-    private void VerifyCapture_Click(object sender, RoutedEventArgs e)
-    {
-        if (_scanner?.ActiveScanner is not { } dev)
-        {
-            SetStatus("연결된 스캐너가 없습니다. '이미지 파일 검증'을 사용할 수 있습니다.");
-            return;
-        }
-        _awaitingVerifyImage = true;
-        _imageTimeout.Stop();
-        _imageTimeout.Start();
-        SetStatus("검증용 이미지 캡처 중... 심볼을 스캐너 정면 중앙에 위치시키세요.");
-        Task.Run(() =>
-        {
-            bool ok = _scanner.CaptureImage(dev.Id);
-            if (!ok) Dispatcher.BeginInvoke(() =>
-            {
-                _awaitingVerifyImage = false;
-                SetStatus("캡처 실패 - 'USB SNAPI (이미징 지원)' 모드인지 확인하세요.");
-            });
-        });
-    }
-
-    private void VerifyFile_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new OpenFileDialog
-        {
-            Title = "검증할 바코드 이미지 선택",
-            Filter = "이미지 파일|*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff",
-        };
-        if (dlg.ShowDialog(this) == true)
-            RunVerification(File.ReadAllBytes(dlg.FileName));
-    }
-
-    private void RunVerification(byte[] imageBytes)
-    {
-        SetStatus("ISO/IEC 15415 시뮬레이션 분석 중...");
-        Enqueue(async () =>
-        {
-            VerificationResult result;
-            try
-            {
-                using var bmp = LoadBitmap(imageBytes);
-                result = Iso15415Verifier.Verify(bmp);
-            }
-            catch (Exception ex)
-            {
-                await Dispatcher.BeginInvoke(() => SetStatus("검증 실패: " + ex.Message));
-                return;
-            }
-            await Dispatcher.BeginInvoke(() =>
-            {
-                _verifySession.Add(result);
-                VerifySessionList.SelectedItem = result;
-                ShowVerifyResult(result);
-                SetStatus($"검증 완료: 종합 {result.OverallLetter} ({result.OverallNumeric:0.0})");
-            });
-            RearmForceCapture(); // 강제 스캔 모드였다면 촬영 모드 복귀
-        });
-    }
-
-    private void ShowVerifyResult(VerificationResult r)
-    {
-        _verifyParams.Clear();
-        foreach (var p in r.Params) _verifyParams.Add(p);
-        OverallGradeText.Text = $"{r.OverallLetter} ({r.OverallNumeric:0.0})";
-        OverallBorder.Background = r.OverallLetter switch
-        {
-            "A" => System.Windows.Media.Brushes.LightGreen,
-            "B" => System.Windows.Media.Brushes.PaleGreen,
-            "C" => System.Windows.Media.Brushes.Khaki,
-            "D" => System.Windows.Media.Brushes.Orange,
-            _ => System.Windows.Media.Brushes.LightCoral,
-        };
-        VerifyFormatText.Text = r.Format;
-        VerifyDecodedText.Text = r.DecodedText;
-
-        var lines = new List<string>();
-        if (r.Recommendations.Count > 0)
-        {
-            lines.Add("▶ 개선 권장사항");
-            lines.AddRange(r.Recommendations.Select(x => "  • " + x));
-            lines.Add("");
-        }
-        lines.AddRange(r.Notes.Select(n => "• " + n));
-        VerifyNotesText.Text = string.Join(Environment.NewLine, lines);
-
-        byte[] imgBytes = OverlayCheck.IsChecked == true && r.AnnotatedPng.Length > 0
-            ? r.AnnotatedPng : r.ImagePng;
-        if (imgBytes.Length > 0)
-        {
-            var bmp = new BitmapImage();
-            using (var ms = new MemoryStream(imgBytes))
-            {
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.StreamSource = ms;
-                bmp.EndInit();
-            }
-            bmp.Freeze();
-            VerifyImage.Source = bmp;
-        }
-    }
-
-    private void OverlayCheck_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (!IsLoaded) return;
-        if (VerifySessionList.SelectedItem is VerificationResult r) ShowVerifyResult(r);
-    }
-
-    private void VerifySessionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (VerifySessionList.SelectedItem is VerificationResult r) ShowVerifyResult(r);
-    }
-
-    private void VerifyClear_Click(object sender, RoutedEventArgs e)
-    {
-        _verifySession.Clear();
-        _verifyParams.Clear();
-        OverallGradeText.Text = "-";
-        VerifyImage.Source = null;
-        VerifyDecodedText.Text = "";
-        VerifyNotesText.Text = "";
-    }
-
-    private void VerifyReport_Click(object sender, RoutedEventArgs e)
-    {
-        if (_verifySession.Count == 0) { SetStatus("저장할 측정 결과가 없습니다."); return; }
-        try
-        {
-            string scannerInfo = _scanner?.ActiveScanner?.ToString() ?? "(스캐너 미연결 - 파일 검증)";
-            string path = ReportService.SaveReport(_verifySession.ToList(), _settings.ReportDirectory, scannerInfo);
-            SetStatus("리포트 저장: " + path);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
-        }
-        catch (Exception ex) { SetStatus("리포트 저장 실패: " + ex.Message); }
-    }
-
-    // ==================== Tab3 : Multi / Continuous ====================
+    // ==================== Multi / Continuous 탭 ====================
 
     private void MultiStart_Click(object sender, RoutedEventArgs e)
     {
@@ -1062,6 +917,6 @@ public partial class MainWindow : Window
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!IsLoaded || e.OriginalSource != MainTabs) return;
-        if (MainTabs.SelectedIndex != 2 && _multiRunning) MultiStop_Click(sender, new RoutedEventArgs());
+        if (MainTabs.SelectedIndex != 1 && _multiRunning) MultiStop_Click(sender, new RoutedEventArgs());
     }
 }

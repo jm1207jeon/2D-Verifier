@@ -93,8 +93,6 @@
                                                  KeyDown="HidInputBox_KeyDown"
                                                  ToolTip="스캐너가 HID 키보드 모드일 때 이 칸에 포커스를 두고 스캔하면 동일하게 처리됩니다 (Enter 종료 문자 필요)"/>
                                     </DockPanel>
-                                    <TextBlock x:Name="QualityText" FontSize="12" FontWeight="Bold" Margin="0,4,0,0"
-                                               ToolTip="DS9908(SNAPI)은 스캔별 품질 수치를 호스트로 제공하지 않으므로, 촬영된 이미지를 프로그램이 분석한 추정치입니다. 이미지가 캡처되는 모드(②/③/강제 스캔)에서 표시됩니다. 흐림·부분 지워짐·가는 공백 선(보이드) 등이 반영됩니다."/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Margin="8,0,0,0">
                                     <TextBlock x:Name="SymbologyText" Text="-" FontSize="14" FontWeight="Bold"
@@ -242,88 +240,7 @@
                 </Grid>
             </TabItem>
 
-            <!-- ===================== TAB 2 : BARCODE VERIFY ===================== -->
-            <TabItem Header="  BARCODE VERIFY  ">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <WrapPanel Grid.Row="0" Margin="4">
-                        <Button Content="스캐너로 캡처 후 검증" FontWeight="Bold" Click="VerifyCapture_Click"/>
-                        <Button Content="이미지 파일 검증" Click="VerifyFile_Click"/>
-                        <Button Content="리포트 저장 (HTML+이미지)" Click="VerifyReport_Click"/>
-                        <Button Content="세션 초기화" Click="VerifyClear_Click"/>
-                        <CheckBox x:Name="OverlayCheck" Content="문제영역 오버레이 표시" IsChecked="True"
-                                  VerticalAlignment="Center" Margin="10,0"
-                                  Checked="OverlayCheck_Toggled" Unchecked="OverlayCheck_Toggled"/>
-                        <TextBlock x:Name="VerifyStatus" VerticalAlignment="Center" Margin="12,0"
-                                   Text="※ 전용 검증기 없이 스캐너 이미지 기반의 ISO/IEC 15415 시뮬레이션 (경향 파악용)" Foreground="#FFB03A2E"/>
-                    </WrapPanel>
-
-                    <Grid Grid.Row="1">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="480"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <Border Grid.Row="0" Background="#FF1E1E1E" Margin="4">
-                                <Image x:Name="VerifyImage" Stretch="Uniform"/>
-                            </Border>
-                            <TextBox Grid.Row="1" x:Name="VerifyDecodedText" IsReadOnly="True" TextWrapping="Wrap"
-                                     MaxHeight="70" Margin="4" FontFamily="Consolas"/>
-                        </Grid>
-
-                        <Grid Grid.Column="1">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="170"/>
-                            </Grid.RowDefinitions>
-                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="4">
-                                <TextBlock Text="종합 등급: " FontSize="20" VerticalAlignment="Center"/>
-                                <Border x:Name="OverallBorder" Background="#FFECF0F1" CornerRadius="6" Padding="14,2">
-                                    <TextBlock x:Name="OverallGradeText" Text="-" FontSize="34" FontWeight="Bold"/>
-                                </Border>
-                                <TextBlock x:Name="VerifyFormatText" VerticalAlignment="Center" Margin="16,0" FontSize="14"/>
-                            </StackPanel>
-                            <DataGrid Grid.Row="1" x:Name="VerifyGrid" AutoGenerateColumns="False" IsReadOnly="True"
-                                      CanUserAddRows="False" Margin="4">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="파라미터" Binding="{Binding Parameter}" Width="230"/>
-                                    <DataGridTextColumn Header="측정값" Binding="{Binding Value}" Width="150"/>
-                                    <DataGridTextColumn Header="등급" Binding="{Binding Letter}" Width="60"/>
-                                    <DataGridTextColumn Header="점수" Binding="{Binding Numeric, StringFormat={}{0:0.0}}" Width="60"/>
-                                    <DataGridTextColumn Header="비고" Binding="{Binding Note}" Width="*"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <Grid Grid.Row="2">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <GroupBox Grid.Column="0" Header="측정 세션 (리포트에 모두 포함)">
-                                    <ListBox x:Name="VerifySessionList" DisplayMemberPath="Summary"
-                                             SelectionChanged="VerifySessionList_SelectionChanged"/>
-                                </GroupBox>
-                                <GroupBox Grid.Column="1" Header="참고 사항">
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                        <TextBlock x:Name="VerifyNotesText" TextWrapping="Wrap" FontSize="11"/>
-                                    </ScrollViewer>
-                                </GroupBox>
-                            </Grid>
-                        </Grid>
-                    </Grid>
-                </Grid>
-            </TabItem>
-
-            <!-- ===================== TAB 3 : Multi / Continuous ===================== -->
+            <!-- ===================== TAB 2 : Multi / Continuous ===================== -->
             <TabItem Header="  Multi / Continuous  ">
                 <Grid Margin="4">
                     <Grid.RowDefinitions>
