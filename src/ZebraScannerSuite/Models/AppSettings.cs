@@ -50,8 +50,11 @@ public class AppSettings
 
     public bool MultiAutoRetrigger { get; set; } = true;
 
-    /// <summary>CoreScanner HID 키보드 에뮬레이터 끄기 (스캔 시 Caps Lock 토글/자동 타이핑 방지)</summary>
-    public bool DisableKeyboardEmulator { get; set; } = true;
+    /// <summary>스캔값을 현재 포커스된 창(엑셀 등)에 키보드로 입력 + Enter (자체 웨지, Caps Lock 무영향)</summary>
+    public bool WedgeOutput { get; set; } = true;
+
+    /// <summary>추출 규칙 기본값 버전 (마이그레이션용, 구버전 파일은 0으로 역직렬화됨)</summary>
+    public int RulesVersion { get; set; }
 
     /// <summary>강제 스캔 모드 활성 상태 (F9, 트리거=촬영)</summary>
     public bool ForceScanEnabled { get; set; }
@@ -78,12 +81,17 @@ public class AppSettings
         },
     };
 
-    public ObservableCollection<ExtractionRule> ExtractionRules { get; set; } = new()
+    public ObservableCollection<ExtractionRule> ExtractionRules { get; set; } = DefaultExtractionRules();
+
+    /// <summary>기본 추출 필드: GTIN(01) / LOT(10) / PN(240) / MFG DATE(11) / EXP DATE(17) / SN(21) / UPN(30)</summary>
+    public static ObservableCollection<ExtractionRule> DefaultExtractionRules() => new()
     {
-        new ExtractionRule { Name = "GTIN/품번",  Type = "GS1", Param1 = "01" },
-        new ExtractionRule { Name = "제조일자",   Type = "GS1", Param1 = "11", DateConvert = true },
-        new ExtractionRule { Name = "유효기한",   Type = "GS1", Param1 = "17", DateConvert = true },
-        new ExtractionRule { Name = "LOT",       Type = "GS1", Param1 = "10" },
-        new ExtractionRule { Name = "시리얼",     Type = "GS1", Param1 = "21" },
+        new ExtractionRule { Name = "GTIN",     Type = "GS1", Param1 = "01" },
+        new ExtractionRule { Name = "LOT",      Type = "GS1", Param1 = "10" },
+        new ExtractionRule { Name = "PN",       Type = "GS1", Param1 = "240" },
+        new ExtractionRule { Name = "MFG DATE", Type = "GS1", Param1 = "11", DateConvert = true },
+        new ExtractionRule { Name = "EXP DATE", Type = "GS1", Param1 = "17", DateConvert = true },
+        new ExtractionRule { Name = "SN",       Type = "GS1", Param1 = "21" },
+        new ExtractionRule { Name = "UPN",      Type = "GS1", Param1 = "30" },
     };
 }

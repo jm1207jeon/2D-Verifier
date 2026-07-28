@@ -34,11 +34,6 @@ public partial class MainWindow : Window
     private bool _awaitingScanImage;
     private readonly DispatcherTimer _imageTimeout = new() { Interval = TimeSpan.FromSeconds(4) };
 
-    // OCR 영역 선택
-    private Point _selStart;
-    private bool _selecting;
-    private Rect _selectionUi = Rect.Empty;
-
     // 강제 스캔: 하드웨어 디코더 재시도 대기용
     private TaskCompletionSource<BarcodeData>? _forceDecodeTcs;
 
@@ -117,7 +112,11 @@ public partial class MainWindow : Window
         {
             if (_scanner?.ActiveScanner is { } s)
             {
-                if (_multiRunning) _scanner.ReleaseTrigger(s.Id);
+                if (_multiRunning)
+                {
+                    _scanner.ReleaseTrigger(s.Id);
+                    _scanner.SetBeepAfterGoodDecode(s.Id, true);
+                }
                 // 촬영 모드로 남겨두면 다음 실행/다른 프로그램에서 스캔이 안 되므로 디코드 모드로 복원
                 _scanner.SetCaptureBarcodeMode(s.Id);
             }
@@ -135,7 +134,7 @@ public partial class MainWindow : Window
         MultiRetriggerCheck.IsChecked = _settings.MultiAutoRetrigger;
         RulesGrid.ItemsSource = _settings.ExtractionRules;
         ForceRulesGrid.ItemsSource = _settings.ForceOcrRules;
-        DisableKbdEmuCheck.IsChecked = _settings.DisableKeyboardEmulator;
+        WedgeCheck.IsChecked = _settings.WedgeOutput;
         ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
         ForceOcrEnableCheck.IsChecked = _settings.ForceOcrEnabled;
 
@@ -159,7 +158,7 @@ public partial class MainWindow : Window
             .Split('\n').Select(s => s.Trim('\r').Trim()).Where(s => s.Length > 0).ToList();
         _settings.CopyOcrToClipboard = CopyClipboardCheck.IsChecked == true;
         _settings.MultiAutoRetrigger = MultiRetriggerCheck.IsChecked == true;
-        _settings.DisableKeyboardEmulator = DisableKbdEmuCheck.IsChecked == true;
+        _settings.WedgeOutput = WedgeCheck.IsChecked == true;
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
         _settings.ForceOcrEnabled = ForceOcrEnableCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
@@ -236,10 +235,17 @@ public partial class MainWindow : Window
     {
         BarcodeText.Text = b.Text;
         SymbologyText.Text = b.Symbology;
-        OcrResultText.Text = "";
         _fields.Clear();
         foreach (var f in DataExtractionService.Apply(b.Text, _settings.ExtractionRules))
             _fields.Add(f);
+
+        // 자체 키보드 웨지: 다른 창(엑셀 등)이 포커스일 때 커서 위치로 값 + Enter 전송
+        // (Zebra 에뮬레이터 대체 - Caps Lock 무영향)
+        if (WedgeCheck.IsChecked == true && !IsActive)
+        {
+            string wedgeText = b.Text;
+            Task.Run(() => KeyboardWedge.TypeText(wedgeText));
+        }
 
         var record = new ScanRecord { Barcode = b.Text, Symbology = b.Symbology, Time = b.Time };
         _history.Insert(0, record);
@@ -335,7 +341,6 @@ public partial class MainWindow : Window
                 string value = matches.Count > 0 ? matches[0] : "";
                 await Dispatcher.BeginInvoke(() =>
                 {
-                    OcrResultText.Text = string.Join(" | ", matches);
                     if (record != null) { record.OcrValue = value; HistoryList.Items.Refresh(); }
                     if (value.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
                         try { Clipboard.SetText(value); } catch { }
@@ -372,7 +377,6 @@ public partial class MainWindow : Window
     {
         if (_scanner is not { IsOpen: true }) return;
         bool forceScan = Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true);
-        bool disableKbd = Dispatcher.Invoke(() => DisableKbdEmuCheck.IsChecked == true);
         Task.Run(() =>
         {
             for (int attempt = 1; attempt <= 5; attempt++)
@@ -386,7 +390,8 @@ public partial class MainWindow : Window
                 }
                 try
                 {
-                    if (disableKbd) _scanner.SetKeyboardEmulator(false);
+                    // Caps Lock 토글의 원인인 HID 키보드 에뮬레이터는 항상 끈다 (자체 웨지로 대체)
+                    _scanner.SetKeyboardEmulator(false);
                     _scanner.ScanEnable(dev.Id);
                     bool ok = forceScan
                         ? _scanner.SetCaptureImageMode(dev.Id)
@@ -403,19 +408,6 @@ public partial class MainWindow : Window
             }
             Dispatcher.BeginInvoke(() => SetStatus(
                 $"{reason}: 스캐너 모드 설정 실패 - USB 재연결 후 [스캐너 새로고침]을 눌러주세요."));
-        });
-    }
-
-    private void KbdEmu_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (!IsLoaded || _scanner is not { IsOpen: true }) return;
-        bool disable = DisableKbdEmuCheck.IsChecked == true;
-        Task.Run(() =>
-        {
-            bool ok = _scanner.SetKeyboardEmulator(!disable);
-            Dispatcher.BeginInvoke(() => SetStatus(disable
-                ? (ok ? "키보드 에뮬레이터 껐습니다 - 스캔 시 Caps Lock을 건드리지 않습니다." : "키보드 에뮬레이터 끄기 실패")
-                : (ok ? "키보드 에뮬레이터 켰습니다 - 스캔 데이터가 키보드로 타이핑됩니다." : "키보드 에뮬레이터 켜기 실패")));
         });
     }
 
@@ -493,11 +485,15 @@ public partial class MainWindow : Window
                     SymbologyText.Text = force.Length > 0 ? "OCR" : "인식 실패";
                     _fields.Clear();
                 }
-                OcrResultText.Text = force;
                 _history.Insert(0, record);
                 while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
                 if (force.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
                     try { Clipboard.SetText(force); } catch { }
+
+                // 자체 키보드 웨지 (바코드값 또는 OCR값)
+                string finalValue = sw?.Text ?? force;
+                if (finalValue.Length > 0 && WedgeCheck.IsChecked == true && !IsActive)
+                    Task.Run(() => KeyboardWedge.TypeText(finalValue));
                 SetStatus(sw != null
                     ? $"강제 스캔: 바코드 인식 ({sw.Symbology}) + 이미지 저장 완료"
                     : force.Length > 0
@@ -586,8 +582,6 @@ public partial class MainWindow : Window
         _lastPixelH = bmp.PixelHeight;
         PreviewImage.Source = bmp;
         NoImageText.Visibility = Visibility.Collapsed;
-        SelectionRect.Visibility = Visibility.Collapsed;
-        _selectionUi = Rect.Empty;
     }
 
     // ==================== Tab1 UI 핸들러 ====================
@@ -607,12 +601,10 @@ public partial class MainWindow : Window
     {
         BarcodeText.Text = "";
         SymbologyText.Text = "-";
-        OcrResultText.Text = "";
         _fields.Clear();
         PreviewImage.Source = null;
         _lastImageBytes = null;
         NoImageText.Visibility = Visibility.Visible;
-        SelectionRect.Visibility = Visibility.Collapsed;
     }
 
     private void HidInputBox_KeyDown(object sender, KeyEventArgs e)
@@ -692,109 +684,6 @@ public partial class MainWindow : Window
         if (RulesGrid.SelectedItem is ExtractionRule r) _settings.ExtractionRules.Remove(r);
     }
 
-    // ---------- OCR 영역 선택 ----------
-
-    private void ImageHost_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (_lastImageBytes == null) return;
-        _selecting = true;
-        _selStart = e.GetPosition(ImageHost);
-        ImageHost.CaptureMouse();
-        SelectionRect.Visibility = Visibility.Visible;
-        UpdateSelection(_selStart, _selStart);
-    }
-
-    private void ImageHost_MouseMove(object sender, MouseEventArgs e)
-    {
-        if (_selecting) UpdateSelection(_selStart, e.GetPosition(ImageHost));
-    }
-
-    private void ImageHost_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (!_selecting) return;
-        _selecting = false;
-        ImageHost.ReleaseMouseCapture();
-        UpdateSelection(_selStart, e.GetPosition(ImageHost));
-    }
-
-    private void UpdateSelection(Point a, Point b)
-    {
-        _selectionUi = new Rect(a, b);
-        System.Windows.Controls.Canvas.SetLeft(SelectionRect, _selectionUi.X);
-        System.Windows.Controls.Canvas.SetTop(SelectionRect, _selectionUi.Y);
-        SelectionRect.Width = _selectionUi.Width;
-        SelectionRect.Height = _selectionUi.Height;
-    }
-
-    /// <summary>UI 선택영역 → 이미지 픽셀 좌표 (Stretch=Uniform 매핑)</summary>
-    private DrawingRect? SelectionToPixelRect()
-    {
-        if (_lastImageBytes == null || _selectionUi.IsEmpty || _selectionUi.Width < 4 || _selectionUi.Height < 4)
-            return null;
-        double cw = ImageHost.ActualWidth, ch = ImageHost.ActualHeight;
-        if (cw <= 0 || ch <= 0 || _lastPixelW <= 0) return null;
-        double scale = Math.Min(cw / _lastPixelW, ch / _lastPixelH);
-        double dispW = _lastPixelW * scale, dispH = _lastPixelH * scale;
-        double offX = (cw - dispW) / 2, offY = (ch - dispH) / 2;
-
-        int x = (int)((_selectionUi.X - offX) / scale);
-        int y = (int)((_selectionUi.Y - offY) / scale);
-        int w = (int)(_selectionUi.Width / scale);
-        int h = (int)(_selectionUi.Height / scale);
-        x = Math.Clamp(x, 0, _lastPixelW - 1);
-        y = Math.Clamp(y, 0, _lastPixelH - 1);
-        w = Math.Clamp(w, 1, _lastPixelW - x);
-        h = Math.Clamp(h, 1, _lastPixelH - y);
-        return new DrawingRect(x, y, w, h);
-    }
-
-    private void OcrRegion_Click(object sender, RoutedEventArgs e)
-    {
-        var rect = SelectionToPixelRect();
-        if (rect == null)
-        {
-            SetStatus("이미지 위에서 마우스로 인식할 영역을 드래그한 뒤 실행하세요.");
-            return;
-        }
-        RunManualOcr(rect);
-    }
-
-    private void OcrFull_Click(object sender, RoutedEventArgs e) => RunManualOcr(null);
-
-    private void RunManualOcr(DrawingRect? region)
-    {
-        if (_lastImageBytes == null) { SetStatus("OCR 대상 이미지가 없습니다."); return; }
-        if (_ocr is not { IsAvailable: true }) { SetStatus("OCR 엔진을 사용할 수 없습니다."); return; }
-        CollectSettingsFromUi();
-        var bytes = _lastImageBytes;
-        var settingsSnapshot = _settings;
-        SetStatus(region == null ? "전체 이미지 OCR 진행 중..." : "선택 영역 OCR 진행 중...");
-
-        Enqueue(async () =>
-        {
-            byte[] target = bytes;
-            if (region is { } r)
-            {
-                using var src = LoadBitmap(bytes);
-                using var crop = src.Clone(r, src.PixelFormat);
-                using var ms = new MemoryStream();
-                crop.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                target = ms.ToArray();
-            }
-            string text = await _ocr.RecognizeAsync(target);
-            var matches = OcrService.FilterByPatterns(text, settingsSnapshot.OcrPatterns);
-            await Dispatcher.BeginInvoke(() =>
-            {
-                OcrResultText.Text = matches.Count > 0 ? string.Join(" | ", matches) : "";
-                if (matches.Count > 0 && settingsSnapshot.CopyOcrToClipboard)
-                    try { Clipboard.SetText(matches[0]); } catch { }
-                SetStatus(matches.Count > 0
-                    ? $"OCR 완료: {matches[0]} (일치 {matches.Count}건)"
-                    : $"OCR 완료: 패턴 일치 없음 (원문 {text.Length}자)");
-            });
-        });
-    }
-
     private static DrawingBitmap LoadBitmap(byte[] bytes)
     {
         using var ms = new MemoryStream(bytes);
@@ -814,9 +703,11 @@ public partial class MainWindow : Window
         _multiRunning = true;
         MultiStartBtn.IsEnabled = false;
         MultiStopBtn.IsEnabled = true;
+        // 스캐너 자체 디코드 비프를 끄고, 신규 바코드일 때만 앱이 비프 (중복=무음)
+        _scanner.SetBeepAfterGoodDecode(dev.Id, false);
         _scanner.PullTrigger(dev.Id);
         if (MultiRetriggerCheck.IsChecked == true) _retriggerTimer.Start();
-        SetStatus("연속 스캔 시작 - 시야의 바코드를 빠르게 훑으세요 (중복 자동 제거)");
+        SetStatus("연속 스캔 시작 - 신규 바코드만 비프, 중복은 무음 (자동 집계)");
     }
 
     private void MultiStop_Click(object sender, RoutedEventArgs e)
@@ -825,7 +716,11 @@ public partial class MainWindow : Window
         _retriggerTimer.Stop();
         MultiStartBtn.IsEnabled = true;
         MultiStopBtn.IsEnabled = false;
-        if (_scanner?.ActiveScanner is { } dev) _scanner.ReleaseTrigger(dev.Id);
+        if (_scanner?.ActiveScanner is { } dev)
+        {
+            _scanner.ReleaseTrigger(dev.Id);
+            _scanner.SetBeepAfterGoodDecode(dev.Id, true); // 디코드 비프 복원
+        }
         SetStatus($"연속 스캔 정지 - 총 {_multiTotal}회 / 고유 {_multiSeen.Count}건");
     }
 
@@ -877,6 +772,9 @@ public partial class MainWindow : Window
             _multiSeen[key] = row;
             _multiRows.Add(row);
             MultiGrid.ScrollIntoView(row);
+            // 신규 바코드에만 비프 1회 (중복은 무음)
+            if (_scanner?.ActiveScanner is { } bdev)
+                Task.Run(() => _scanner.Beep(bdev.Id, 0));
         }
         MultiTotalText.Text = _multiTotal.ToString();
         MultiUniqueText.Text = _multiSeen.Count.ToString();

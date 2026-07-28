@@ -22,6 +22,7 @@ public sealed class CoreScannerService : IDisposable
     private const int DEVICE_RELEASE_TRIGGER= 2012;
     private const int DEVICE_SCAN_DISABLE   = 2013;
     private const int DEVICE_SCAN_ENABLE    = 2014;
+    private const int DEVICE_SET_PARAMETERS = 2016;
     private const int DEVICE_CAPTURE_IMAGE  = 3000;
     private const int DEVICE_CAPTURE_BARCODE= 3500;
     private const int SET_ACTION            = 6000;
@@ -155,6 +156,18 @@ public sealed class CoreScannerService : IDisposable
             "</cmdArgs></inArgs>";
         var (status, _) = Exec(DEVICE_SWITCH_HOST_MODE, inXml);
         return status == 0;
+    }
+
+    /// <summary>디코드 성공 비프음(파라미터 #56, Beep After Good Decode) 켜기/끄기.
+    /// 멀티 스캔 중 끄고, 신규 바코드일 때만 앱이 Beep()으로 비프를 낸다.
+    /// (전원 재인가 시 스캐너 기본값으로 복원되는 임시 설정)</summary>
+    public bool SetBeepAfterGoodDecode(int scannerId, bool enable)
+    {
+        string inXml =
+            $"<inArgs><scannerID>{scannerId}</scannerID><cmdArgs><arg-xml><attrib_list>" +
+            $"<attribute><id>56</id><datatype>B</datatype><value>{(enable ? 1 : 0)}</value></attribute>" +
+            "</attrib_list></arg-xml></cmdArgs></inArgs>";
+        return Exec(DEVICE_SET_PARAMETERS, inXml).status == 0;
     }
 
     /// <summary>CoreScanner 드라이버의 HID 키보드 에뮬레이터 켜기/끄기.

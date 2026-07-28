@@ -27,11 +27,20 @@ public static class SettingsService
             if (File.Exists(FilePath))
             {
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), JsonOpts);
-                if (s != null) return s;
+                if (s != null)
+                {
+                    // 구버전 설정의 추출 규칙을 새 기본값(GTIN/LOT/PN/MFG/EXP/SN/UPN)으로 마이그레이션
+                    if (s.RulesVersion < 2)
+                    {
+                        s.ExtractionRules = AppSettings.DefaultExtractionRules();
+                        s.RulesVersion = 2;
+                    }
+                    return s;
+                }
             }
         }
         catch { /* 손상된 설정은 기본값으로 대체 */ }
-        return new AppSettings();
+        return new AppSettings { RulesVersion = 2 };
     }
 
     public static void Save(AppSettings settings)

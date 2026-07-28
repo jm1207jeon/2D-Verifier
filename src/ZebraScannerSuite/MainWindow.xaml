@@ -48,7 +48,6 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="185"/>
                         </Grid.RowDefinitions>
 
@@ -69,6 +68,9 @@
                                           Content="+ OCR 수행"
                                           IsEnabled="{Binding IsChecked, ElementName=ForceScanCheck}"
                                           ToolTip="강제 스캔 시 바코드가 없으면 강제 OCR 규칙(Lot+SN 등)으로 텍스트 값을 추출합니다. 강제 스캔이 꺼져 있으면 사용할 수 없습니다."/>
+                                <CheckBox x:Name="WedgeCheck" Margin="0,4,14,4" VerticalAlignment="Center"
+                                          Content="스캔값 키보드 입력 (커서 위치 + Enter)"
+                                          ToolTip="스캔한 값을 현재 포커스된 창(엑셀 등)의 커서 위치에 입력하고 Enter를 보냅니다. Caps Lock 상태는 건드리지 않습니다."/>
                                 <Separator Width="12" Visibility="Hidden"/>
                                 <TextBlock Text="호스트 모드:" VerticalAlignment="Center" Margin="8,0,4,0"/>
                                 <ComboBox x:Name="HostModeCombo" Width="215" VerticalAlignment="Center"/>
@@ -102,31 +104,15 @@
                             </Grid>
                         </GroupBox>
 
-                        <GroupBox Grid.Row="2" Header="캡처 이미지 (마우스 드래그로 OCR 영역 선택)">
-                            <Grid x:Name="ImageHost" Background="#FF1E1E1E"
-                                  MouseLeftButtonDown="ImageHost_MouseDown"
-                                  MouseMove="ImageHost_MouseMove"
-                                  MouseLeftButtonUp="ImageHost_MouseUp">
+                        <GroupBox Grid.Row="2" Header="캡처 이미지">
+                            <Grid x:Name="ImageHost" Background="#FF1E1E1E">
                                 <Image x:Name="PreviewImage" Stretch="Uniform"/>
-                                <Canvas x:Name="SelectionCanvas" IsHitTestVisible="False">
-                                    <Rectangle x:Name="SelectionRect" Stroke="OrangeRed" StrokeThickness="2"
-                                               StrokeDashArray="4 2" Fill="#33FF4500" Visibility="Collapsed"/>
-                                </Canvas>
                                 <TextBlock x:Name="NoImageText" Text="이미지 없음 - ②/③ 모드에서 트리거를 당기면 촬영됩니다"
                                            Foreground="#FF9E9E9E" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Grid>
                         </GroupBox>
 
-                        <GroupBox Grid.Row="3" Header="OCR (사전 설정 패턴 일치 문자만 채택)">
-                            <DockPanel>
-                                <Button DockPanel.Dock="Left" Content="선택 영역 OCR" Click="OcrRegion_Click"/>
-                                <Button DockPanel.Dock="Left" Content="전체 이미지 OCR" Click="OcrFull_Click"/>
-                                <TextBlock DockPanel.Dock="Left" Text="  OCR 값: " VerticalAlignment="Center"/>
-                                <TextBox x:Name="OcrResultText" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
-                            </DockPanel>
-                        </GroupBox>
-
-                        <Grid Grid.Row="4">
+                        <Grid Grid.Row="3">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="*"/>
@@ -144,10 +130,8 @@
                                 <ListView x:Name="HistoryList">
                                     <ListView.View>
                                         <GridView>
-                                            <GridViewColumn Header="시간" Width="70" DisplayMemberBinding="{Binding TimeText}"/>
-                                            <GridViewColumn Header="바코드" Width="200" DisplayMemberBinding="{Binding Barcode}"/>
-                                            <GridViewColumn Header="OCR" Width="90" DisplayMemberBinding="{Binding OcrValue}"/>
-                                            <GridViewColumn Header="이미지 파일" Width="220" DisplayMemberBinding="{Binding ImagePath}"/>
+                                            <GridViewColumn Header="시간" Width="80" DisplayMemberBinding="{Binding TimeText}"/>
+                                            <GridViewColumn Header="바코드" Width="560" DisplayMemberBinding="{Binding Barcode}"/>
                                         </GridView>
                                     </ListView.View>
                                 </ListView>
@@ -170,16 +154,6 @@
                                     <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
                                                Text="토큰: {DATE:yyyyMMdd} {TIME:HHmmss} {BARCODE} {SYMBOLOGY} {SEQ:3} {OCR}  /  ### = {SEQ:3}"/>
                                     <TextBlock x:Name="FileRuleExample" FontSize="11" Foreground="#FF1A5276" TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </GroupBox>
-
-                            <GroupBox Header="장치 설정">
-                                <StackPanel>
-                                    <CheckBox x:Name="DisableKbdEmuCheck"
-                                              Content="키보드 에뮬레이터 끄기 (스캔 시 Caps Lock 토글 방지)"
-                                              Checked="KbdEmu_Toggled" Unchecked="KbdEmu_Toggled"/>
-                                    <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
-                                               Text="Zebra CoreScanner 드라이버의 HID 키보드 에뮬레이터가 스캔할 때마다 데이터를 키보드로 타이핑하면서 Caps Lock을 켜고 끄는 현상을 방지합니다. 본 프로그램은 SDK로 직접 데이터를 받으므로 에뮬레이터가 필요 없습니다. (해제 시 다시 타이핑 동작)"/>
                                 </StackPanel>
                             </GroupBox>
 
