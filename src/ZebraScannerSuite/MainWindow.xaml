@@ -224,7 +224,10 @@
                     </Grid.RowDefinitions>
 
                     <WrapPanel Grid.Row="0">
-                        <Button x:Name="MultiStartBtn" Content="▶ 시작 (트리거 유지 연속 스캔)" FontWeight="Bold" Click="MultiStart_Click"/>
+                        <Button x:Name="MultiStartBtn" Content="▶ 고속 판독 (트리거 유지)" FontWeight="Bold" Click="MultiStart_Click"/>
+                        <Button x:Name="MultiViewStartBtn" Content="▶ 실시간 스캔 뷰 (촬영 + 영역표시)" FontWeight="Bold"
+                                Foreground="#FF1A5276" Click="MultiViewStart_Click"
+                                ToolTip="연속 촬영하며 화면에 영역을 표시합니다: 녹색=판독완료, 주황=미판독, 빨강=여러 번 실패(손상 의심). 판독된 값은 목록에 자동 수집됩니다."/>
                         <Button x:Name="MultiStopBtn" Content="■ 정지" IsEnabled="False" Click="MultiStop_Click"/>
                         <CheckBox x:Name="MultiRetriggerCheck" Content="자동 재트리거 (연속 유지)" IsChecked="True"
                                   VerticalAlignment="Center" Margin="10,0"/>
@@ -237,20 +240,39 @@
                         <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50"/>
                         <TextBlock Text="   고유 바코드: "/>
                         <TextBlock x:Name="MultiUniqueText" Text="0" FontWeight="Bold" MinWidth="50"/>
-                        <TextBlock Text="   ※ 시야 내 바코드를 트리거 유지 상태로 빠르게 훑으세요. 중복은 자동 제거(횟수 집계)됩니다."
-                                   Foreground="Gray"/>
+                        <TextBlock Text="   스캔 뷰: " Foreground="Gray"/>
+                        <TextBlock x:Name="MultiViewInfoText" Text="-" FontWeight="Bold" MinWidth="180"/>
+                        <TextBlock Text="   ※ 중복은 자동 제거(횟수 집계), 신규 바코드만 비프." Foreground="Gray"/>
                     </StackPanel>
 
-                    <DataGrid Grid.Row="2" x:Name="MultiGrid" AutoGenerateColumns="False" IsReadOnly="True"
-                              CanUserAddRows="False">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="#" Binding="{Binding No}" Width="50"/>
-                            <DataGridTextColumn Header="최초 시간" Binding="{Binding TimeText}" Width="90"/>
-                            <DataGridTextColumn Header="심볼로지" Binding="{Binding Symbology}" Width="130"/>
-                            <DataGridTextColumn Header="데이터" Binding="{Binding Data}" Width="*"/>
-                            <DataGridTextColumn Header="읽은 횟수" Binding="{Binding Count}" Width="80"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="5*"/>
+                            <ColumnDefinition Width="4*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <GroupBox Grid.Column="0" Header="실시간 스캔 뷰 (녹색=판독완료 / 주황=미판독 / 빨강=판독불가 의심)">
+                            <Grid Background="#FF1E1E1E">
+                                <Image x:Name="MultiPreview" Stretch="Uniform"/>
+                                <TextBlock x:Name="MultiPreviewHint" Foreground="#FF9E9E9E" TextWrapping="Wrap"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
+                                           Text="[실시간 스캔 뷰]를 시작하면 연속 촬영 화면에&#10;바코드 영역이 색상으로 표시됩니다"/>
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Grid.Column="1" Header="판독 목록">
+                            <DataGrid x:Name="MultiGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                                      CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="#" Binding="{Binding No}" Width="40"/>
+                                    <DataGridTextColumn Header="시간" Binding="{Binding TimeText}" Width="85"/>
+                                    <DataGridTextColumn Header="심볼로지" Binding="{Binding Symbology}" Width="110"/>
+                                    <DataGridTextColumn Header="데이터" Binding="{Binding Data}" Width="*"/>
+                                    <DataGridTextColumn Header="횟수" Binding="{Binding Count}" Width="50"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </GroupBox>
+                    </Grid>
                 </Grid>
             </TabItem>
         </TabControl>
