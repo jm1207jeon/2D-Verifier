@@ -224,13 +224,11 @@
                     </Grid.RowDefinitions>
 
                     <WrapPanel Grid.Row="0">
-                        <Button x:Name="MultiStartBtn" Content="▶ 고속 판독 (트리거 유지)" FontWeight="Bold" Click="MultiStart_Click"/>
+                        <Button x:Name="MultiStartBtn" Content="▶ 고속 판독 (트리거를 당기는 동안 연속)" FontWeight="Bold" Click="MultiStart_Click"/>
                         <Button x:Name="MultiViewStartBtn" Content="▶ 실시간 스캔 뷰 (촬영 + 영역표시)" FontWeight="Bold"
                                 Foreground="#FF1A5276" Click="MultiViewStart_Click"
                                 ToolTip="연속 촬영하며 화면에 영역을 표시합니다: 녹색=판독완료, 주황=미판독, 빨강=여러 번 실패(손상 의심). 판독된 값은 목록에 자동 수집됩니다."/>
                         <Button x:Name="MultiStopBtn" Content="■ 정지" IsEnabled="False" Click="MultiStop_Click"/>
-                        <CheckBox x:Name="MultiRetriggerCheck" Content="자동 재트리거 (연속 유지)" IsChecked="True"
-                                  VerticalAlignment="Center" Margin="10,0"/>
                         <Button Content="목록 지우기" Click="MultiClear_Click"/>
                         <Button Content="CSV 내보내기" Click="MultiExport_Click"/>
                     </WrapPanel>
@@ -240,9 +238,7 @@
                         <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50"/>
                         <TextBlock Text="   고유 바코드: "/>
                         <TextBlock x:Name="MultiUniqueText" Text="0" FontWeight="Bold" MinWidth="50"/>
-                        <TextBlock Text="   스캔 뷰: " Foreground="Gray"/>
-                        <TextBlock x:Name="MultiViewInfoText" Text="-" FontWeight="Bold" MinWidth="180"/>
-                        <TextBlock Text="   ※ 중복은 자동 제거(횟수 집계), 신규 바코드만 비프." Foreground="Gray"/>
+                        <TextBlock Text="   ※ 트리거를 당기는 동안 연속 판독됩니다. 중복은 자동 제거, 신규 바코드만 비프." Foreground="Gray"/>
                     </StackPanel>
 
                     <Grid Grid.Row="2">
@@ -251,12 +247,25 @@
                             <ColumnDefinition Width="4*"/>
                         </Grid.ColumnDefinitions>
 
-                        <GroupBox Grid.Column="0" Header="실시간 스캔 뷰 (녹색=판독완료 / 주황=미판독 / 빨강=판독불가 의심)">
+                        <GroupBox Grid.Column="0" Header="실시간 뷰 (빛반사·거리를 눈으로 확인하며 위치를 맞추세요)">
                             <Grid Background="#FF1E1E1E">
                                 <Image x:Name="MultiPreview" Stretch="Uniform"/>
                                 <TextBlock x:Name="MultiPreviewHint" Foreground="#FF9E9E9E" TextWrapping="Wrap"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
-                                           Text="[실시간 스캔 뷰]를 시작하면 연속 촬영 화면에&#10;바코드 영역이 색상으로 표시됩니다"/>
+                                           Text="[실시간 스캔 뷰]를 시작하면 연속 촬영 화면이 표시되고&#10;프레임 사이에 하드웨어 디코더로 자동 판독됩니다"/>
+                                <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="14,6,0,0">
+                                    <TextBlock x:Name="BigCountText" Text="0" FontSize="76" FontWeight="Bold"
+                                               Foreground="#FFFFD400">
+                                        <TextBlock.Effect>
+                                            <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="2"/>
+                                        </TextBlock.Effect>
+                                    </TextBlock>
+                                    <TextBlock Text="고유 판독 수" FontSize="15" FontWeight="Bold" Foreground="#FFFFD400" Margin="4,-8,0,0">
+                                        <TextBlock.Effect>
+                                            <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="1"/>
+                                        </TextBlock.Effect>
+                                    </TextBlock>
+                                </StackPanel>
                             </Grid>
                         </GroupBox>
 

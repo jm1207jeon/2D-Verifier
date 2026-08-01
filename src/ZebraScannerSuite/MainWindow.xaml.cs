@@ -42,12 +42,11 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
     private int _multiTotal;
     private bool _multiRunning;
-    private int _repullInFlight;
-    // 하트비트: 즉시 재트리거가 놓친 경우를 대비한 보조 (실제 재트리거는 디코드 직후 40ms 내 수행)
-    private readonly DispatcherTimer _retriggerTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    // 트리거 버스트 카운트 (트리거 당긴 시점부터 중복 제외 고유 수)
+    private readonly HashSet<string> _burstSeen = new();
+    private DateTime _lastMultiDecode = DateTime.MinValue;
 
-    // 실시간 스캔 뷰 (연속 촬영 + 영역 표시)
-    private readonly MultiViewAnalyzer _multiView = new();
+    // 실시간 스캔 뷰 (연속 촬영 표시 + 프레임 사이 하드웨어 판독)
     private bool _multiViewRunning;
     private int _mvBusy;
     private DateTime _mvLastFrame = DateTime.MinValue;
@@ -60,7 +59,6 @@ public partial class MainWindow : Window
         HistoryList.ItemsSource = _history;
         MultiGrid.ItemsSource = _multiRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
-        _retriggerTimer.Tick += RetriggerTimer_Tick;
         _mvWatchdog.Tick += MvWatchdog_Tick;
     }
 
@@ -139,7 +137,6 @@ public partial class MainWindow : Window
         FileRuleText.Text = _settings.FileNameRule;
         OcrPatternsText.Text = string.Join(Environment.NewLine, _settings.OcrPatterns);
         CopyClipboardCheck.IsChecked = _settings.CopyOcrToClipboard;
-        MultiRetriggerCheck.IsChecked = _settings.MultiAutoRetrigger;
         RulesGrid.ItemsSource = _settings.ExtractionRules;
         ForceRulesGrid.ItemsSource = _settings.ForceOcrRules;
         WedgeCheck.IsChecked = _settings.WedgeOutput;
@@ -165,7 +162,6 @@ public partial class MainWindow : Window
         _settings.OcrPatterns = OcrPatternsText.Text
             .Split('\n').Select(s => s.Trim('\r').Trim()).Where(s => s.Length > 0).ToList();
         _settings.CopyOcrToClipboard = CopyClipboardCheck.IsChecked == true;
-        _settings.MultiAutoRetrigger = MultiRetriggerCheck.IsChecked == true;
         _settings.WedgeOutput = WedgeCheck.IsChecked == true;
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
         _settings.ForceOcrEnabled = ForceOcrEnableCheck.IsChecked == true;
@@ -228,12 +224,7 @@ public partial class MainWindow : Window
 
         if (MainTabs.SelectedIndex == 1) // Multi / Continuous 탭
         {
-            if (_multiRunning)
-            {
-                AddMultiScan(b);
-                // 디코드 성공 시 세션이 종료되므로 즉시 재트리거 (최고 속도 연속 스캔)
-                RepullTriggerSoon();
-            }
+            if (_multiRunning || _multiViewRunning) AddMultiScan(b);
             return;
         }
         HandleScanTab(b);
@@ -718,14 +709,18 @@ public partial class MainWindow : Window
         }
         if (_multiViewRunning) MultiViewStop(); // 스캔 뷰와 상호 배타
         _multiRunning = true;
+        _burstSeen.Clear();
+        BigCountText.Text = "0";
         MultiStartBtn.IsEnabled = false;
         MultiViewStartBtn.IsEnabled = false;
         MultiStopBtn.IsEnabled = true;
-        // 스캐너 자체 디코드 비프를 끄고, 신규 바코드일 때만 앱이 비프 (중복=무음)
-        _scanner.SetBeepAfterGoodDecode(dev.Id, false);
-        _scanner.PullTrigger(dev.Id);
-        if (MultiRetriggerCheck.IsChecked == true) _retriggerTimer.Start();
-        SetStatus("연속 스캔 시작 - 신규 바코드만 비프, 중복은 무음 (자동 집계)");
+        Task.Run(() =>
+        {
+            // 스캐너 자체 디코드 비프를 끄고, 신규 바코드일 때만 앱이 비프 (중복=무음)
+            _scanner.SetBeepAfterGoodDecode(dev.Id, false);
+            _scanner.SetCaptureBarcodeMode(dev.Id); // 디코드 모드 확정 (트리거는 사용자가 직접)
+        });
+        SetStatus("고속 판독 대기 - 트리거를 당기는 동안 연속 판독됩니다 (신규만 비프, 중복 무음)");
     }
 
     private void MultiStop_Click(object sender, RoutedEventArgs e)
@@ -734,12 +729,9 @@ public partial class MainWindow : Window
         if (_multiRunning)
         {
             _multiRunning = false;
-            _retriggerTimer.Stop();
             if (_scanner?.ActiveScanner is { } dev)
-            {
-                _scanner.ReleaseTrigger(dev.Id);
                 _scanner.SetBeepAfterGoodDecode(dev.Id, true); // 디코드 비프 복원
-            }
+            EnsureScannerMode("판독 정지"); // 일반 설정(강제 스캔 등)으로 복원
             SetStatus($"연속 스캔 정지 - 총 {_multiTotal}회 / 고유 {_multiSeen.Count}건");
         }
         MultiStartBtn.IsEnabled = true;
@@ -747,37 +739,17 @@ public partial class MainWindow : Window
         MultiStopBtn.IsEnabled = false;
     }
 
-    private void RetriggerTimer_Tick(object? sender, EventArgs e)
-    {
-        // 하트비트 재트리거(0.5초): 디코드 세션 타임아웃/즉시 재트리거 누락 대비
-        // (DS9908 프레젠테이션 모드에서는 상시 감지되므로 보조 역할)
-        if (_multiRunning && _scanner?.ActiveScanner is { } dev)
-            _scanner.PullTrigger(dev.Id);
-    }
-
-    /// <summary>디코드 직후 즉시 트리거 재무장: release → 40ms → pull.
-    /// 연속 스캔 속도를 타이머 주기와 무관하게 최대화한다. (중복 호출은 1건으로 병합)</summary>
-    private void RepullTriggerSoon()
-    {
-        if (!_multiRunning || _scanner?.ActiveScanner is not { } dev) return;
-        if (Interlocked.Exchange(ref _repullInFlight, 1) == 1) return;
-        Task.Run(() =>
-        {
-            try
-            {
-                _scanner.ReleaseTrigger(dev.Id);
-                Thread.Sleep(40); // 세션 정리 최소 대기
-                if (_multiRunning) _scanner.PullTrigger(dev.Id);
-            }
-            catch { }
-            finally { Interlocked.Exchange(ref _repullInFlight, 0); }
-        });
-    }
-
     private void AddMultiScan(BarcodeData b)
     {
         _multiTotal++;
         string key = b.Symbology + "|" + b.Text;
+
+        // 트리거 버스트 카운트: 2.5초 이상 판독 공백 후 첫 판독 = 새 버스트(트리거) 시작
+        var now = DateTime.Now;
+        if ((now - _lastMultiDecode).TotalSeconds > 2.5) _burstSeen.Clear();
+        _lastMultiDecode = now;
+        _burstSeen.Add(key);
+        BigCountText.Text = _burstSeen.Count.ToString();
         if (_multiSeen.TryGetValue(key, out var row))
         {
             row.Count++;
@@ -803,7 +775,7 @@ public partial class MainWindow : Window
         MultiUniqueText.Text = _multiSeen.Count.ToString();
     }
 
-    // ---------- 실시간 스캔 뷰 (연속 촬영 + 색상 영역 표시) ----------
+    // ---------- 실시간 스캔 뷰 (연속 촬영 표시 + 프레임 사이 하드웨어 판독) ----------
 
     private void MultiViewStart_Click(object sender, RoutedEventArgs e)
     {
@@ -814,17 +786,19 @@ public partial class MainWindow : Window
         }
         if (_multiRunning) MultiStop_Click(sender, e); // 고속 판독 모드와 상호 배타
 
-        _multiView.Reset();
         _multiViewRunning = true;
+        _burstSeen.Clear();
+        BigCountText.Text = "0";
         _mvLastFrame = DateTime.Now;
         MultiStartBtn.IsEnabled = false;
         MultiViewStartBtn.IsEnabled = false;
         MultiStopBtn.IsEnabled = true;
         MultiPreviewHint.Visibility = Visibility.Collapsed;
         _mvWatchdog.Start();
-        SetStatus("실시간 스캔 뷰 시작 - 녹색=판독완료 / 주황=미판독 / 빨강=판독불가 의심");
+        SetStatus("실시간 스캔 뷰 시작 - 화면을 보며 거리/반사를 맞추세요. 프레임 사이에 자동 판독됩니다.");
         Task.Run(() =>
         {
+            _scanner.SetBeepAfterGoodDecode(dev.Id, false); // 신규만 앱 비프
             _scanner.SetCaptureImageMode(dev.Id);
             Thread.Sleep(40);
             _scanner.PullTrigger(dev.Id);
@@ -839,50 +813,49 @@ public partial class MainWindow : Window
         MultiStartBtn.IsEnabled = true;
         MultiViewStartBtn.IsEnabled = true;
         MultiStopBtn.IsEnabled = _multiRunning;
-        if (_scanner?.ActiveScanner is { } dev) _scanner.ReleaseTrigger(dev.Id);
+        if (_scanner?.ActiveScanner is { } dev)
+        {
+            _scanner.ReleaseTrigger(dev.Id);
+            _scanner.SetBeepAfterGoodDecode(dev.Id, true);
+        }
         EnsureScannerMode("스캔 뷰 정지"); // 일반 설정(디코드/강제 스캔)에 맞게 복원
         SetStatus($"스캔 뷰 정지 - 고유 {_multiSeen.Count}건 수집");
     }
 
     private void MvWatchdog_Tick(object? sender, EventArgs e)
     {
-        // 프레임이 2초 이상 안 오면 촬영 루프 재가동
-        if (_multiViewRunning && (DateTime.Now - _mvLastFrame).TotalSeconds > 2)
+        // 판독 윈도우 진행 중이 아닌데 프레임이 2초 이상 안 오면 촬영 루프 재가동
+        if (_multiViewRunning && _mvBusy == 0 && (DateTime.Now - _mvLastFrame).TotalSeconds > 2)
             RearmMultiView();
     }
 
+    /// <summary>스캔 뷰 프레임 처리: ① 화면 즉시 표시(오버레이 없음) →
+    /// ② 하드웨어 디코더로 짧은 판독 윈도우 수행(소프트웨어 디코드는 다중 소형 DM에
+    /// 부정확해 제거) → ③ 다음 촬영 재무장. 판독 값은 목록/카운트에 반영.</summary>
     private void ProcessMultiViewFrame(byte[] bytes)
     {
-        // 분석이 밀리면 프레임 드롭 (최신 프레임 우선)
-        if (Interlocked.Exchange(ref _mvBusy, 1) == 1)
+        ShowMultiPreview(bytes); // 원본 프레임 그대로 즉시 표시
+
+        if (Interlocked.Exchange(ref _mvBusy, 1) == 1) return; // 사이클 겹침 방지
+        Task.Run(async () =>
         {
-            RearmMultiView();
-            return;
-        }
-        Task.Run(() =>
-        {
-            MultiViewResult? res = null;
             try
             {
-                using var bmp = LoadBitmap(bytes);
-                res = _multiView.Analyze(bmp);
+                if (_multiViewRunning && _scanner?.ActiveScanner is { } dev)
+                {
+                    // 하드웨어 판독 윈도우 (같은 심볼은 스캐너의 same-symbol timeout으로
+                    // 자동 회피되어 매 사이클 다른 바코드가 순차적으로 읽힌다)
+                    var b = await TryHardwareDecodeAsync(dev.Id, 700);
+                    if (b != null)
+                        await Dispatcher.BeginInvoke(() => AddMultiScan(b));
+                }
             }
             catch { }
             finally
             {
                 Interlocked.Exchange(ref _mvBusy, 0);
-            }
-            Dispatcher.BeginInvoke(() =>
-            {
-                if (res != null)
-                {
-                    ShowMultiPreview(res.AnnotatedPng);
-                    foreach (var (text, format) in res.NewDecodes)
-                        AddMultiScan(new BarcodeData { Text = text, Symbology = format, Time = DateTime.Now });
-                    MultiViewInfoText.Text = $"판독 {res.GreenCount} · 미판독 {res.OrangeCount} · 불가의심 {res.RedCount}";
-                }
                 RearmMultiView();
-            });
+            }
         });
     }
 
@@ -918,9 +891,11 @@ public partial class MainWindow : Window
     {
         _multiRows.Clear();
         _multiSeen.Clear();
+        _burstSeen.Clear();
         _multiTotal = 0;
         MultiTotalText.Text = "0";
         MultiUniqueText.Text = "0";
+        BigCountText.Text = "0";
     }
 
     private void MultiExport_Click(object sender, RoutedEventArgs e)

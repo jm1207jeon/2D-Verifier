@@ -48,8 +48,6 @@ public class AppSettings
     /// <summary>선호 호스트 모드 코드 (XUA-45001-x)</summary>
     public string PreferredHostMode { get; set; } = "XUA-45001-9"; // USB SNAPI with imaging
 
-    public bool MultiAutoRetrigger { get; set; } = true;
-
     /// <summary>스캔값을 현재 포커스된 창(엑셀 등)에 키보드로 입력 + Enter (자체 웨지, Caps Lock 무영향)</summary>
     public bool WedgeOutput { get; set; } = true;
 
