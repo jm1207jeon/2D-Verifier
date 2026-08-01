@@ -20,15 +20,6 @@ public class ScannerInfo
     public override string ToString() => $"[{Id}] {Model} ({Serial}) - {Type}";
 }
 
-public class ScanRecord
-{
-    public DateTime Time { get; set; } = DateTime.Now;
-    public string Barcode { get; set; } = "";
-    public string Symbology { get; set; } = "";
-    public string ImagePath { get; set; } = "";
-    public string TimeText => Time.ToString("HH:mm:ss");
-}
-
 public class FieldValue
 {
     public string Name { get; set; } = "";

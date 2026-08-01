@@ -26,7 +26,6 @@ public partial class MainWindow : Window
 
     // Tab1 상태
     private readonly ObservableCollection<FieldValue> _fields = new();
-    private readonly ObservableCollection<ScanRecord> _history = new();
     private byte[]? _lastImageBytes;
     private int _lastPixelW, _lastPixelH;
     private BarcodeData? _pendingScan;          // 이미지 대기 중인 바코드
@@ -40,7 +39,6 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<MultiScanRow> _multiRows = new();
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
     private int _multiTotal;
-    private bool _multiRunning;
     // 트리거 버스트 카운트 (트리거 당긴 시점부터 중복 제외 고유 수)
     private readonly HashSet<string> _burstSeen = new();
     private DateTime _lastMultiDecode = DateTime.MinValue;
@@ -55,7 +53,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         FieldsGrid.ItemsSource = _fields;
-        HistoryList.ItemsSource = _history;
         MultiGrid.ItemsSource = _multiRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
         _mvWatchdog.Tick += MvWatchdog_Tick;
@@ -114,11 +111,7 @@ public partial class MainWindow : Window
         {
             if (_scanner?.ActiveScanner is { } s)
             {
-                if (_multiRunning)
-                {
-                    _scanner.ReleaseTrigger(s.Id);
-                    _scanner.SetBeepAfterGoodDecode(s.Id, true);
-                }
+                if (_multiViewRunning) _scanner.SetBeepAfterGoodDecode(s.Id, true);
                 // 촬영 모드로 남겨두면 다음 실행/다른 프로그램에서 스캔이 안 되므로 디코드 모드로 복원
                 _scanner.SetCaptureBarcodeMode(s.Id);
             }
@@ -131,7 +124,6 @@ public partial class MainWindow : Window
     {
         SaveDirText.Text = _settings.ImageSaveDirectory;
         FileRuleText.Text = _settings.FileNameRule;
-        RulesGrid.ItemsSource = _settings.ExtractionRules;
         WedgeCheck.IsChecked = _settings.WedgeOutput;
         ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
 
@@ -210,7 +202,7 @@ public partial class MainWindow : Window
 
         if (MainTabs.SelectedIndex == 1) // Multi / Continuous 탭
         {
-            if (_multiRunning || _multiViewRunning) AddMultiScan(b);
+            if (_multiViewRunning) AddMultiScan(b);
             return;
         }
         HandleScanTab(b);
@@ -231,10 +223,6 @@ public partial class MainWindow : Window
             string wedgeText = b.Text;
             Task.Run(() => KeyboardWedge.TypeText(wedgeText));
         }
-
-        var record = new ScanRecord { Barcode = b.Text, Symbology = b.Symbology, Time = b.Time };
-        _history.Insert(0, record);
-        while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
 
         int mode = CurrentMode;
         if (mode == 0 || _scanner?.ActiveScanner is not { } dev)
@@ -310,7 +298,6 @@ public partial class MainWindow : Window
         _awaitingScanImage = false;
         var scan = _pendingScan;
         _pendingScan = null;
-        var record = _history.FirstOrDefault(r => r.Time == scan.Time && r.Barcode == scan.Text);
         int mode = CurrentMode;
         CollectSettingsFromUi();
         var settingsSnapshot = _settings;
@@ -319,11 +306,7 @@ public partial class MainWindow : Window
         {
             // 1) 이미지 저장
             string path = ImageSaveService.Save(imageBytes, scan.Text, scan.Symbology, "", settingsSnapshot);
-            await Dispatcher.BeginInvoke(() =>
-            {
-                if (record != null) { record.ImagePath = Path.GetFileName(path); HistoryList.Items.Refresh(); }
-                SetStatus("이미지 저장 완료: " + path);
-            });
+            await Dispatcher.BeginInvoke(() => SetStatus("이미지 저장 완료: " + path));
         });
     }
 
@@ -420,13 +403,6 @@ public partial class MainWindow : Window
             string baseName = sw?.Text ?? "NOCODE";
             string path = ImageSaveService.Save(bytes, baseName, sw?.Symbology ?? "IMAGE", "", settingsSnapshot);
 
-            var record = new ScanRecord
-            {
-                Barcode = sw?.Text ?? "(촬영)",
-                Symbology = sw?.Symbology ?? "IMAGE",
-                ImagePath = Path.GetFileName(path),
-            };
-
             await Dispatcher.BeginInvoke(() =>
             {
                 if (sw != null)
@@ -443,9 +419,6 @@ public partial class MainWindow : Window
                     SymbologyText.Text = "인식 실패";
                     _fields.Clear();
                 }
-                _history.Insert(0, record);
-                while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
-
                 // 자체 키보드 웨지
                 if (sw != null && WedgeCheck.IsChecked == true && !IsActive)
                 {
@@ -633,12 +606,125 @@ public partial class MainWindow : Window
         SetStatus("설정이 저장되었습니다. (재실행 시에도 유지)");
     }
 
-    private void AddRule_Click(object sender, RoutedEventArgs e) =>
-        _settings.ExtractionRules.Add(new ExtractionRule { Name = "새 규칙", Type = "REGEX", Param1 = "" });
-
-    private void DelRule_Click(object sender, RoutedEventArgs e)
+    /// <summary>바코드 리딩값 표시: GS1 응용식별자(01,10,17,11,240,21,30 등)만 빨간색으로 강조</summary>
+    private void SetBarcodeDisplay(string text)
     {
-        if (RulesGrid.SelectedItem is ExtractionRule r) _settings.ExtractionRules.Remove(r);
+        BarcodeText.Inlines.Clear();
+        if (string.IsNullOrEmpty(text)) return;
+        foreach (var token in Gs1Parser.Tokenize(text))
+        {
+            var run = new System.Windows.Documents.Run(token.Text);
+            if (token.IsAi)
+            {
+                run.Foreground = System.Windows.Media.Brushes.Red;
+            }
+            BarcodeText.Inlines.Add(run);
+        }
+    }
+
+    private void ShowPreview(byte[] bytes)
+    {
+        _lastImageBytes = bytes;
+        var bmp = new BitmapImage();
+        using (var ms = new MemoryStream(bytes))
+        {
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.StreamSource = ms;
+            bmp.EndInit();
+        }
+        bmp.Freeze();
+        _lastPixelW = bmp.PixelWidth;
+        _lastPixelH = bmp.PixelHeight;
+        PreviewImage.Source = bmp;
+        NoImageText.Visibility = Visibility.Collapsed;
+    }
+
+    // ==================== Tab1 UI 핸들러 ====================
+
+    private void Mode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        SetStatus(CurrentMode == 0 ? "모드: 바코드만 리딩" : "모드: 바코드 + 이미지 캡처");
+    }
+
+    private void ClearScan_Click(object sender, RoutedEventArgs e)
+    {
+        SetBarcodeDisplay("");
+        SymbologyText.Text = "-";
+        _fields.Clear();
+        PreviewImage.Source = null;
+        _lastImageBytes = null;
+        NoImageText.Visibility = Visibility.Visible;
+    }
+
+    private void HidInputBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter && e.Key != Key.Return) return;
+        string text = HidInputBox.Text.Trim();
+        HidInputBox.Clear();
+        if (text.Length == 0) return;
+        OnBarcode(new BarcodeData { Text = text, Symbology = "HID-KBD", Time = DateTime.Now });
+        e.Handled = true;
+    }
+
+    private void RefreshScanners_Click(object sender, RoutedEventArgs e)
+    {
+        if (_scanner == null) { Task.Run(InitScanner); SetStatus("스캐너 재검색..."); return; }
+        _scanner.RefreshScanners();
+        UpdateScannerStatus();
+        SetStatus($"스캐너 {_scanner.Scanners.Count}대 검색됨");
+    }
+
+    private void SwitchHostMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (_scanner?.ActiveScanner is not { } dev)
+        {
+            SetStatus("연결된 스캐너가 없습니다.");
+            return;
+        }
+        if (HostModeCombo.SelectedItem is not ComboBoxItem { Tag: string code }) return;
+        bool permanent = HostModePermanent.IsChecked == true;
+        SetStatus("호스트 모드 전환 중... 스캐너가 재부팅됩니다 (수 초 소요)");
+        Task.Run(() =>
+        {
+            bool ok = _scanner.SwitchHostMode(dev.Id, code, permanent);
+            Dispatcher.BeginInvoke(() => SetStatus(ok
+                ? "호스트 모드 전환 명령 전송 완료 - 재연결 대기 중"
+                : "호스트 모드 전환 실패"));
+        });
+    }
+
+    private void BrowseDir_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFolderDialog { Title = "이미지 저장 폴더 선택" };
+        if (Directory.Exists(SaveDirText.Text)) dlg.InitialDirectory = SaveDirText.Text;
+        if (dlg.ShowDialog(this) == true)
+        {
+            SaveDirText.Text = dlg.FolderName;
+            UpdateRuleExample();
+        }
+    }
+
+    private void FileRuleText_TextChanged(object sender, TextChangedEventArgs e) => UpdateRuleExample();
+
+    private void UpdateRuleExample()
+    {
+        try
+        {
+            string path = ImageSaveService.BuildPath(
+                SaveDirText.Text.Length > 0 ? SaveDirText.Text : ".",
+                FileRuleText.Text, "0123456789012", "EAN-13", "", ".jpg");
+            FileRuleExample.Text = "예시: " + Path.GetFileName(path);
+        }
+        catch (Exception ex) { FileRuleExample.Text = "규칙 오류: " + ex.Message; }
+    }
+
+    private void SaveSettings_Click(object sender, RoutedEventArgs e)
+    {
+        CollectSettingsFromUi();
+        SettingsService.Save(_settings);
+        SetStatus("설정이 저장되었습니다. (재실행 시에도 유지)");
     }
 
     private static DrawingBitmap LoadBitmap(byte[] bytes)
@@ -650,44 +736,7 @@ public partial class MainWindow : Window
 
     // ==================== Multi / Continuous 탭 ====================
 
-    private void MultiStart_Click(object sender, RoutedEventArgs e)
-    {
-        if (_scanner?.ActiveScanner is not { } dev)
-        {
-            SetStatus("연결된 스캐너가 없습니다.");
-            return;
-        }
-        if (_multiViewRunning) MultiViewStop(); // 스캔 뷰와 상호 배타
-        _multiRunning = true;
-        _burstSeen.Clear();
-        BigCountText.Text = "0";
-        MultiStartBtn.IsEnabled = false;
-        MultiViewStartBtn.IsEnabled = false;
-        MultiStopBtn.IsEnabled = true;
-        Task.Run(() =>
-        {
-            // 스캐너 자체 디코드 비프를 끄고, 신규 바코드일 때만 앱이 비프 (중복=무음)
-            _scanner.SetBeepAfterGoodDecode(dev.Id, false);
-            _scanner.SetCaptureBarcodeMode(dev.Id); // 디코드 모드 확정 (트리거는 사용자가 직접)
-        });
-        SetStatus("고속 판독 대기 - 트리거를 당기는 동안 연속 판독됩니다 (신규만 비프, 중복 무음)");
-    }
-
-    private void MultiStop_Click(object sender, RoutedEventArgs e)
-    {
-        if (_multiViewRunning) MultiViewStop();
-        if (_multiRunning)
-        {
-            _multiRunning = false;
-            if (_scanner?.ActiveScanner is { } dev)
-                _scanner.SetBeepAfterGoodDecode(dev.Id, true); // 디코드 비프 복원
-            EnsureScannerMode("판독 정지"); // 일반 설정(강제 스캔 등)으로 복원
-            SetStatus($"연속 스캔 정지 - 총 {_multiTotal}회 / 고유 {_multiSeen.Count}건");
-        }
-        MultiStartBtn.IsEnabled = true;
-        MultiViewStartBtn.IsEnabled = true;
-        MultiStopBtn.IsEnabled = false;
-    }
+    private void MultiStop_Click(object sender, RoutedEventArgs e) => MultiViewStop();
 
     private void AddMultiScan(BarcodeData b)
     {
@@ -734,24 +783,19 @@ public partial class MainWindow : Window
             SetStatus("연결된 스캐너가 없습니다.");
             return;
         }
-        if (_multiRunning) MultiStop_Click(sender, e); // 고속 판독 모드와 상호 배타
-
         _multiViewRunning = true;
         _burstSeen.Clear();
         BigCountText.Text = "0";
         _mvLastFrame = DateTime.Now;
-        MultiStartBtn.IsEnabled = false;
         MultiViewStartBtn.IsEnabled = false;
         MultiStopBtn.IsEnabled = true;
         MultiPreviewHint.Visibility = Visibility.Collapsed;
         _mvWatchdog.Start();
-        SetStatus("실시간 스캔 뷰 시작 - 화면을 보며 거리/반사를 맞추세요. 프레임 사이에 자동 판독됩니다.");
+        SetStatus("실시간 스캔 뷰 대기 - 트리거를 당기면 촬영되고 바코드가 판독됩니다.");
         Task.Run(() =>
         {
             _scanner.SetBeepAfterGoodDecode(dev.Id, false); // 신규만 앱 비프
-            _scanner.SetCaptureImageMode(dev.Id);
-            Thread.Sleep(40);
-            _scanner.PullTrigger(dev.Id);
+            _scanner.SetCaptureImageMode(dev.Id); // 촬영 대기만 (트리거는 사용자가 직접)
         });
     }
 
@@ -760,9 +804,8 @@ public partial class MainWindow : Window
         if (!_multiViewRunning) return;
         _multiViewRunning = false;
         _mvWatchdog.Stop();
-        MultiStartBtn.IsEnabled = true;
         MultiViewStartBtn.IsEnabled = true;
-        MultiStopBtn.IsEnabled = _multiRunning;
+        MultiStopBtn.IsEnabled = false;
         if (_scanner?.ActiveScanner is { } dev)
         {
             _scanner.ReleaseTrigger(dev.Id);
@@ -809,16 +852,14 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>다음 촬영 대기 상태로 복귀 (촬영 모드만 무장, 트리거는 사용자가 직접 당김)</summary>
     private void RearmMultiView()
     {
         if (!_multiViewRunning || _scanner?.ActiveScanner is not { } dev) return;
         Task.Run(() =>
         {
             Thread.Sleep(60);
-            if (!_multiViewRunning) return;
-            _scanner.SetCaptureImageMode(dev.Id);
-            Thread.Sleep(30);
-            if (_multiViewRunning) _scanner.PullTrigger(dev.Id);
+            if (_multiViewRunning) _scanner.SetCaptureImageMode(dev.Id);
         });
     }
 
@@ -874,7 +915,7 @@ public partial class MainWindow : Window
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!IsLoaded || e.OriginalSource != MainTabs) return;
-        if (MainTabs.SelectedIndex != 1 && (_multiRunning || _multiViewRunning))
-            MultiStop_Click(sender, new RoutedEventArgs());
+        if (MainTabs.SelectedIndex != 1 && _multiViewRunning)
+            MultiViewStop();
     }
 }

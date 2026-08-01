@@ -56,7 +56,7 @@ public static class Gs1Parser
 
         while (pos < s.Length)
         {
-            if (s[pos] == GS) { tokens.Add(new Gs1Token(" ", false)); pos++; continue; }
+            if (s[pos] == GS) { pos++; continue; } // GS 구분자는 표시하지 않음 (빈칸 방지)
 
             string? ai = null;
             int fixedLen = -1;
