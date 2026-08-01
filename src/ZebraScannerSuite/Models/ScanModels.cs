@@ -26,7 +26,6 @@ public class ScanRecord
     public string Barcode { get; set; } = "";
     public string Symbology { get; set; } = "";
     public string ImagePath { get; set; } = "";
-    public string OcrValue { get; set; } = "";
     public string TimeText => Time.ToString("HH:mm:ss");
 }
 

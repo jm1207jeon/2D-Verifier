@@ -1,8 +1,14 @@
+using System.Text.RegularExpressions;
+
 namespace ZebraScannerSuite.Services;
+
+/// <summary>GS1 토큰: AI(응용식별자) 또는 데이터 값</summary>
+public readonly record struct Gs1Token(string Text, bool IsAi);
 
 /// <summary>
 /// GS1 응용식별자(AI) 파서. GS1-128 / GS1 DataMatrix / GS1 QR 데이터에서
 /// AI별 값을 추출한다. FNC1 구분자는 GS(0x1D) 문자로 수신된다.
+/// 토큰화(Tokenize)를 기반으로 하여 UI에서 AI만 색상 표시하는 용도로도 사용한다.
 /// </summary>
 public static class Gs1Parser
 {
@@ -32,22 +38,28 @@ public static class Gs1Parser
     public static string StripAim(string data) =>
         data.Length >= 3 && data[0] == ']' ? data[3..] : data;
 
-    public static Dictionary<string, string> Parse(string data)
+    /// <summary>데이터를 AI/값 토큰 열로 분해. 인식 불가 잔여분은 값 토큰으로 남긴다.</summary>
+    public static List<Gs1Token> Tokenize(string data)
     {
-        var result = new Dictionary<string, string>();
-        if (string.IsNullOrEmpty(data)) return result;
+        var tokens = new List<Gs1Token>();
+        if (string.IsNullOrEmpty(data)) return tokens;
 
-        string s = StripAim(data);
+        string s = data;
+        if (s.Length >= 3 && s[0] == ']')
+        {
+            tokens.Add(new Gs1Token(s[..3], false)); // AIM 식별자는 일반 표시
+            s = s[3..];
+        }
         // 괄호 표기 "(01)1234..." 도 지원
         if (s.StartsWith('(')) s = s.Replace("(", "").Replace(")", "");
         int pos = 0;
 
         while (pos < s.Length)
         {
-            if (s[pos] == GS) { pos++; continue; }
+            if (s[pos] == GS) { tokens.Add(new Gs1Token(" ", false)); pos++; continue; }
+
             string? ai = null;
             int fixedLen = -1;
-
             foreach (int n in new[] { 2, 3, 4 })
             {
                 if (pos + n > s.Length) break;
@@ -63,7 +75,12 @@ public static class Gs1Parser
                 if (n == 4 && Var4.Contains(cand)) { ai = cand; fixedLen = -2; break; }
             }
 
-            if (ai == null) break; // 인식 불가 → 중단
+            if (ai == null)
+            {
+                // 인식 불가 → 나머지는 값으로 표시하고 종료
+                tokens.Add(new Gs1Token(s[pos..], false));
+                break;
+            }
 
             pos += ai.Length;
             string value;
@@ -77,9 +94,46 @@ public static class Gs1Parser
             {
                 int gs = s.IndexOf(GS, pos);
                 value = gs < 0 ? s[pos..] : s[pos..gs];
-                pos = gs < 0 ? s.Length : gs + 1;
+                pos = gs < 0 ? s.Length : gs;
             }
-            result[ai] = value;
+
+            // 특례: AI 21(SN)은 1~2자리 숫자이고, 바로 이어서 AI 30 + 'M…'(UPN)이
+            // GS 없이 붙는 라벨 형식 지원 → SN과 UPN을 분리
+            if (ai == "21")
+            {
+                var m = Regex.Match(value, @"^(\d{1,2})30(M.*)$");
+                if (m.Success)
+                {
+                    tokens.Add(new Gs1Token("21", true));
+                    tokens.Add(new Gs1Token(m.Groups[1].Value, false));
+                    tokens.Add(new Gs1Token("30", true));
+                    tokens.Add(new Gs1Token(m.Groups[2].Value, false));
+                    continue;
+                }
+            }
+
+            tokens.Add(new Gs1Token(ai, true));
+            if (value.Length > 0) tokens.Add(new Gs1Token(value, false));
+        }
+        return tokens;
+    }
+
+    public static Dictionary<string, string> Parse(string data)
+    {
+        var result = new Dictionary<string, string>();
+        string? currentAi = null;
+        foreach (var t in Tokenize(data))
+        {
+            if (t.IsAi)
+            {
+                currentAi = t.Text;
+                result.TryAdd(currentAi, "");
+            }
+            else if (currentAi != null && !string.IsNullOrWhiteSpace(t.Text))
+            {
+                result[currentAi] = t.Text;
+                currentAi = null;
+            }
         }
         return result;
     }

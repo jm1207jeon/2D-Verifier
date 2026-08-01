@@ -48,7 +48,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="185"/>
+                            <RowDefinition Height="250"/>
                         </Grid.RowDefinitions>
 
                         <GroupBox Grid.Row="0" Header="동작 모드 / 스캐너 연결">
@@ -57,17 +57,11 @@
                                              IsChecked="True" Checked="Mode_Changed" VerticalAlignment="Center"/>
                                 <RadioButton x:Name="ModeBarcodeImage" Content="② 바코드 + 이미지 캡처" Margin="4,4,14,4"
                                              Checked="Mode_Changed" VerticalAlignment="Center"/>
-                                <RadioButton x:Name="ModeBarcodeImageOcr" Content="③ 바코드 + 이미지 + OCR 입력" Margin="4,4,14,4"
-                                             Checked="Mode_Changed" VerticalAlignment="Center"/>
                                 <CheckBox x:Name="ForceScanCheck" Margin="4,4,6,4" VerticalAlignment="Center"
                                           Foreground="#FFB03A2E" FontWeight="Bold"
                                           Content="강제 스캔 (F9): 트리거=촬영"
                                           Checked="ForceScan_Toggled" Unchecked="ForceScan_Toggled"
                                           ToolTip="켜면 트리거를 당길 때마다 사진을 촬영해 소프트웨어로 바코드를 인식하고 이미지를 저장합니다."/>
-                                <CheckBox x:Name="ForceOcrEnableCheck" Margin="0,4,14,4" VerticalAlignment="Center"
-                                          Content="+ OCR 수행"
-                                          IsEnabled="{Binding IsChecked, ElementName=ForceScanCheck}"
-                                          ToolTip="강제 스캔 시 바코드가 없으면 강제 OCR 규칙(Lot+SN 등)으로 텍스트 값을 추출합니다. 강제 스캔이 꺼져 있으면 사용할 수 없습니다."/>
                                 <CheckBox x:Name="WedgeCheck" Margin="0,4,14,4" VerticalAlignment="Center"
                                           Content="스캔값 키보드 입력 (커서 위치 + Enter)"
                                           ToolTip="스캔한 값을 현재 포커스된 창(엑셀 등)의 커서 위치에 입력하고 Enter를 보냅니다. Caps Lock 상태는 건드리지 않습니다."/>
@@ -87,8 +81,9 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBox x:Name="BarcodeText" IsReadOnly="True" FontSize="24" FontWeight="Bold"
-                                             TextWrapping="Wrap" MinHeight="44" Background="#FFFDF6E3"/>
+                                    <Border Background="#FFFDF6E3" BorderBrush="#FFBBB69A" BorderThickness="1" MinHeight="44" Padding="4,2">
+                                        <TextBlock x:Name="BarcodeText" FontSize="24" FontWeight="Bold" TextWrapping="Wrap"/>
+                                    </Border>
                                     <DockPanel Margin="0,4,0,0">
                                         <TextBlock Text="HID 키보드 입력(HID 모드 시 여기에 스캔): " VerticalAlignment="Center"/>
                                         <TextBox x:Name="HidInputBox" Width="260" HorizontalAlignment="Left"
@@ -107,7 +102,7 @@
                         <GroupBox Grid.Row="2" Header="캡처 이미지">
                             <Grid x:Name="ImageHost" Background="#FF1E1E1E">
                                 <Image x:Name="PreviewImage" Stretch="Uniform"/>
-                                <TextBlock x:Name="NoImageText" Text="이미지 없음 - ②/③ 모드에서 트리거를 당기면 촬영됩니다"
+                                <TextBlock x:Name="NoImageText" Text="이미지 없음 - ② 모드 또는 강제 스캔에서 트리거를 당기면 촬영됩니다"
                                            Foreground="#FF9E9E9E" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Grid>
                         </GroupBox>
@@ -128,10 +123,30 @@
                             </GroupBox>
                             <GroupBox Grid.Column="1" Header="최근 스캔">
                                 <ListView x:Name="HistoryList">
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="Padding" Value="2,0"/>
+                                            <Setter Property="MinHeight" Value="19"/>
+                                            <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
                                     <ListView.View>
                                         <GridView>
-                                            <GridViewColumn Header="시간" Width="80" DisplayMemberBinding="{Binding TimeText}"/>
-                                            <GridViewColumn Header="바코드" Width="560" DisplayMemberBinding="{Binding Barcode}"/>
+                                            <GridViewColumn Header="시간" Width="70">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding TimeText}" VerticalAlignment="Center"/>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn Header="바코드" Width="560">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Barcode}" VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Barcode}"/>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
                                         </GridView>
                                     </ListView.View>
                                 </ListView>
@@ -152,37 +167,8 @@
                                     <TextBlock Text="파일명 규칙" Margin="0,8,0,0"/>
                                     <TextBox x:Name="FileRuleText" TextChanged="FileRuleText_TextChanged"/>
                                     <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
-                                               Text="토큰: {DATE:yyyyMMdd} {TIME:HHmmss} {BARCODE} {SYMBOLOGY} {SEQ:3} {OCR}  /  ### = {SEQ:3}"/>
+                                               Text="토큰: {DATE:yyyyMMdd} {TIME:HHmmss} {BARCODE} {SYMBOLOGY} {SEQ:3}  /  ### = {SEQ:3}"/>
                                     <TextBlock x:Name="FileRuleExample" FontSize="11" Foreground="#FF1A5276" TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </GroupBox>
-
-                            <GroupBox Header="OCR 설정">
-                                <StackPanel>
-                                    <TextBlock x:Name="OcrEngineText" FontSize="11" Foreground="Gray"/>
-                                    <TextBlock Text="허용 패턴 (정규식, 한 줄에 하나) - 일치 문자만 입력" Margin="0,4,0,0"/>
-                                    <TextBox x:Name="OcrPatternsText" AcceptsReturn="True" Height="80"
-                                             VerticalScrollBarVisibility="Auto" FontFamily="Consolas"/>
-                                    <CheckBox x:Name="CopyClipboardCheck" Content="OCR 결과를 클립보드로 복사 (빠른 입력)" Margin="0,6,0,0"/>
-                                </StackPanel>
-                            </GroupBox>
-
-                            <GroupBox Header="강제 OCR 규칙 (텍스트 라벨 → 값 변환, 위에서부터 첫 일치 적용)">
-                                <StackPanel>
-                                    <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
-                                               Text="정규식 캡처 그룹을 출력의 $1,$2로 조합. 예: 'Lot No. 26070124 / SN. 14' → 26070124-14, '26070124-1' → 26070124-1"/>
-                                    <DataGrid x:Name="ForceRulesGrid" AutoGenerateColumns="False" CanUserAddRows="False"
-                                              Height="110" HeadersVisibility="Column" FontFamily="Consolas">
-                                        <DataGrid.Columns>
-                                            <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="90"/>
-                                            <DataGridTextColumn Header="패턴(정규식)" Binding="{Binding Pattern}" Width="*"/>
-                                            <DataGridTextColumn Header="출력" Binding="{Binding Output}" Width="60"/>
-                                        </DataGrid.Columns>
-                                    </DataGrid>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="규칙 추가" Click="AddForceRule_Click"/>
-                                        <Button Content="선택 삭제" Click="DelForceRule_Click"/>
-                                    </StackPanel>
                                 </StackPanel>
                             </GroupBox>
 

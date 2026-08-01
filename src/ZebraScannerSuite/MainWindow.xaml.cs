@@ -19,7 +19,6 @@ public partial class MainWindow : Window
 {
     private AppSettings _settings = new();
     private CoreScannerService? _scanner;
-    private OcrService? _ocr;
 
     // 처리 파이프라인 (저장/OCR 버퍼링 - 상태바에 진행 표시)
     private readonly Channel<Func<Task>> _jobs = Channel.CreateUnbounded<Func<Task>>();
@@ -68,9 +67,6 @@ public partial class MainWindow : Window
     {
         _settings = SettingsService.Load();
         ApplySettingsToUi();
-
-        _ocr = new OcrService();
-        OcrEngineText.Text = _ocr.EngineDescription;
 
         _ = Task.Run(WorkerLoop);
 
@@ -135,17 +131,12 @@ public partial class MainWindow : Window
     {
         SaveDirText.Text = _settings.ImageSaveDirectory;
         FileRuleText.Text = _settings.FileNameRule;
-        OcrPatternsText.Text = string.Join(Environment.NewLine, _settings.OcrPatterns);
-        CopyClipboardCheck.IsChecked = _settings.CopyOcrToClipboard;
         RulesGrid.ItemsSource = _settings.ExtractionRules;
-        ForceRulesGrid.ItemsSource = _settings.ForceOcrRules;
         WedgeCheck.IsChecked = _settings.WedgeOutput;
         ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
-        ForceOcrEnableCheck.IsChecked = _settings.ForceOcrEnabled;
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
-        ModeBarcodeImage.IsChecked = _settings.ScanMode == 1;
-        ModeBarcodeImageOcr.IsChecked = _settings.ScanMode == 2;
+        ModeBarcodeImage.IsChecked = _settings.ScanMode >= 1;
 
         HostModeCombo.Items.Clear();
         foreach (var (name, code) in CoreScannerService.HostModes)
@@ -159,19 +150,14 @@ public partial class MainWindow : Window
     {
         _settings.ImageSaveDirectory = SaveDirText.Text.Trim();
         _settings.FileNameRule = FileRuleText.Text.Trim();
-        _settings.OcrPatterns = OcrPatternsText.Text
-            .Split('\n').Select(s => s.Trim('\r').Trim()).Where(s => s.Length > 0).ToList();
-        _settings.CopyOcrToClipboard = CopyClipboardCheck.IsChecked == true;
         _settings.WedgeOutput = WedgeCheck.IsChecked == true;
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
-        _settings.ForceOcrEnabled = ForceOcrEnableCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
         if (HostModeCombo.SelectedItem is ComboBoxItem { Tag: string code })
             _settings.PreferredHostMode = code;
     }
 
-    private int CurrentMode =>
-        ModeBarcodeImageOcr.IsChecked == true ? 2 : ModeBarcodeImage.IsChecked == true ? 1 : 0;
+    private int CurrentMode => ModeBarcodeImage.IsChecked == true ? 1 : 0;
 
     // ==================== 상태 표시 ====================
 
@@ -232,7 +218,7 @@ public partial class MainWindow : Window
 
     private void HandleScanTab(BarcodeData b)
     {
-        BarcodeText.Text = b.Text;
+        SetBarcodeDisplay(b.Text);
         SymbologyText.Text = b.Symbology;
         _fields.Clear();
         foreach (var f in DataExtractionService.Apply(b.Text, _settings.ExtractionRules))
@@ -338,23 +324,7 @@ public partial class MainWindow : Window
                 if (record != null) { record.ImagePath = Path.GetFileName(path); HistoryList.Items.Refresh(); }
                 SetStatus("이미지 저장 완료: " + path);
             });
-
-            // 2) 모드 ③: OCR 후 값 입력
-            if (mode == 2 && _ocr is { IsAvailable: true })
-            {
-                await Dispatcher.BeginInvoke(() => SetStatus("OCR 진행 중..."));
-                string text = await _ocr.RecognizeAsync(imageBytes);
-                var matches = OcrService.FilterByPatterns(text, settingsSnapshot.OcrPatterns);
-                string value = matches.Count > 0 ? matches[0] : "";
-                await Dispatcher.BeginInvoke(() =>
-                {
-                    if (record != null) { record.OcrValue = value; HistoryList.Items.Refresh(); }
-                    if (value.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
-                        try { Clipboard.SetText(value); } catch { }
-                    SetStatus(matches.Count > 0
-                        ? $"OCR 완료: {value} (패턴 일치 {matches.Count}건)"
-                        : "OCR 완료: 패턴에 일치하는 문자 없음");
-                });
+        });
             }
         });
     }
@@ -431,15 +401,10 @@ public partial class MainWindow : Window
     {
         CollectSettingsFromUi();
         var settingsSnapshot = _settings;
-        bool doOcr = ForceOcrEnableCheck.IsChecked == true;
-        SetStatus(doOcr ? "강제 스캔: 분석 중 (바코드 → 텍스트 순)..." : "강제 스캔: 분석 중 (바코드만)...");
+        SetStatus("강제 스캔: 바코드 분석 중...");
 
         Enqueue(async () =>
         {
-            // OCR·품질 분석은 디코드와 병렬로 미리 시작 (대기시간 단축)
-            Task<string> ocrTask = doOcr && _ocr is { IsAvailable: true }
-                ? _ocr.RecognizeAsync(bytes)
-                : Task.FromResult("");
             // ① 고속 소프트웨어 디코드 (~수십 ms)
             BarcodeData? sw = TrySoftwareDecode(bytes, thorough: false);
 
@@ -453,26 +418,14 @@ public partial class MainWindow : Window
             // ③ 마지막으로 정밀 소프트웨어 디코드 (TryHarder+대비보정)
             sw ??= TrySoftwareDecode(bytes, thorough: true);
 
-            // ④ OCR 결과 취합 (이미 병렬로 돌고 있었음)
-            string force = "";
-            if (doOcr)
-            {
-                string ocrText = await ocrTask;
-                force = OcrService.ApplyForceRules(ocrText, settingsSnapshot.ForceOcrRules) ?? "";
-                if (force.Length == 0 && sw == null)
-                    force = OcrService.FilterByPatterns(ocrText, settingsSnapshot.OcrPatterns).FirstOrDefault() ?? "";
-            }
-
-
-            // ③ 이미지 저장 ({BARCODE} 토큰 = 바코드값 또는 OCR값)
-            string baseName = sw?.Text ?? (force.Length > 0 ? force : "NOCODE");
-            string path = ImageSaveService.Save(bytes, baseName, sw?.Symbology ?? "TEXT", force, settingsSnapshot);
+            // ④ 이미지 저장 (바코드 인식 여부와 무관하게 항상 저장)
+            string baseName = sw?.Text ?? "NOCODE";
+            string path = ImageSaveService.Save(bytes, baseName, sw?.Symbology ?? "IMAGE", "", settingsSnapshot);
 
             var record = new ScanRecord
             {
-                Barcode = sw?.Text ?? (force.Length > 0 ? force : doOcr ? "(텍스트 인식 실패)" : "(촬영)"),
-                Symbology = sw?.Symbology ?? (doOcr ? "OCR" : "IMAGE"),
-                OcrValue = force,
+                Barcode = sw?.Text ?? "(촬영)",
+                Symbology = sw?.Symbology ?? "IMAGE",
                 ImagePath = Path.GetFileName(path),
             };
 
@@ -480,7 +433,7 @@ public partial class MainWindow : Window
             {
                 if (sw != null)
                 {
-                    BarcodeText.Text = sw.Text;
+                    SetBarcodeDisplay(sw.Text);
                     SymbologyText.Text = sw.Symbology;
                     _fields.Clear();
                     foreach (var f in DataExtractionService.Apply(sw.Text, settingsSnapshot.ExtractionRules))
@@ -488,26 +441,22 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    BarcodeText.Text = force;
-                    SymbologyText.Text = force.Length > 0 ? "OCR" : "인식 실패";
+                    SetBarcodeDisplay("");
+                    SymbologyText.Text = "인식 실패";
                     _fields.Clear();
                 }
                 _history.Insert(0, record);
                 while (_history.Count > 200) _history.RemoveAt(_history.Count - 1);
-                if (force.Length > 0 && settingsSnapshot.CopyOcrToClipboard)
-                    try { Clipboard.SetText(force); } catch { }
 
-                // 자체 키보드 웨지 (바코드값 또는 OCR값)
-                string finalValue = sw?.Text ?? force;
-                if (finalValue.Length > 0 && WedgeCheck.IsChecked == true && !IsActive)
-                    Task.Run(() => KeyboardWedge.TypeText(finalValue));
+                // 자체 키보드 웨지
+                if (sw != null && WedgeCheck.IsChecked == true && !IsActive)
+                {
+                    string wedgeText = sw.Text;
+                    Task.Run(() => KeyboardWedge.TypeText(wedgeText));
+                }
                 SetStatus(sw != null
                     ? $"강제 스캔: 바코드 인식 ({sw.Symbology}) + 이미지 저장 완료"
-                    : force.Length > 0
-                        ? $"강제 스캔 OCR: {force} (이미지 저장 완료)"
-                        : doOcr
-                            ? "강제 스캔: 바코드/패턴 인식 실패 (이미지는 저장됨)"
-                            : "강제 스캔: 촬영/저장 완료 (OCR 꺼짐)");
+                    : "강제 스캔: 바코드 인식 실패 (이미지는 저장됨)");
             });
 
             RearmForceCapture();
@@ -565,12 +514,20 @@ public partial class MainWindow : Window
         });
     }
 
-    private void AddForceRule_Click(object sender, RoutedEventArgs e) =>
-        _settings.ForceOcrRules.Add(new ForceOcrRule { Name = "새 규칙", Pattern = @"(\d+)", Output = "$1" });
-
-    private void DelForceRule_Click(object sender, RoutedEventArgs e)
+    /// <summary>바코드 리딩값 표시: GS1 응용식별자(01,10,17,11,240,21,30 등)만 빨간색으로 강조</summary>
+    private void SetBarcodeDisplay(string text)
     {
-        if (ForceRulesGrid.SelectedItem is ForceOcrRule r) _settings.ForceOcrRules.Remove(r);
+        BarcodeText.Inlines.Clear();
+        if (string.IsNullOrEmpty(text)) return;
+        foreach (var token in Gs1Parser.Tokenize(text))
+        {
+            var run = new System.Windows.Documents.Run(token.Text);
+            if (token.IsAi)
+            {
+                run.Foreground = System.Windows.Media.Brushes.Red;
+            }
+            BarcodeText.Inlines.Add(run);
+        }
     }
 
     private void ShowPreview(byte[] bytes)
@@ -596,17 +553,12 @@ public partial class MainWindow : Window
     private void Mode_Changed(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
-        SetStatus(CurrentMode switch
-        {
-            0 => "모드: 바코드만 리딩",
-            1 => "모드: 바코드 + 이미지 캡처",
-            _ => "모드: 바코드 + 이미지 + OCR 입력",
-        });
+        SetStatus(CurrentMode == 0 ? "모드: 바코드만 리딩" : "모드: 바코드 + 이미지 캡처");
     }
 
     private void ClearScan_Click(object sender, RoutedEventArgs e)
     {
-        BarcodeText.Text = "";
+        SetBarcodeDisplay("");
         SymbologyText.Text = "-";
         _fields.Clear();
         PreviewImage.Source = null;
@@ -670,7 +622,7 @@ public partial class MainWindow : Window
         {
             string path = ImageSaveService.BuildPath(
                 SaveDirText.Text.Length > 0 ? SaveDirText.Text : ".",
-                FileRuleText.Text, "0123456789012", "EAN-13", "SAMPLE", ".jpg");
+                FileRuleText.Text, "0123456789012", "EAN-13", "", ".jpg");
             FileRuleExample.Text = "예시: " + Path.GetFileName(path);
         }
         catch (Exception ex) { FileRuleExample.Text = "규칙 오류: " + ex.Message; }
