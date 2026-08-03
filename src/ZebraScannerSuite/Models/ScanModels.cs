@@ -26,12 +26,19 @@ public class FieldValue
     public string Value { get; set; } = "";
 }
 
+/// <summary>멀티 스캔 판독 목록 행 (응용식별자별 분리, 중복은 Count만 증가)</summary>
 public class MultiScanRow
 {
     public int No { get; set; }
     public string TimeText { get; set; } = "";
-    public string Symbology { get; set; } = "";
-    public string Data { get; set; } = "";
+    public string Gtin { get; set; } = "";
+    public string Lot { get; set; } = "";
+    public string Mfg { get; set; } = "";
+    public string Exp { get; set; } = "";
+    public string Pn { get; set; } = "";
+    public string Sn { get; set; } = "";
+    public string Upn { get; set; } = "";
+    public string Raw { get; set; } = "";
     public int Count { get; set; } = 1;
 }
 

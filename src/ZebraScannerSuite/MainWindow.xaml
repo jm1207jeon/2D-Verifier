@@ -146,63 +146,48 @@
                     </Grid.RowDefinitions>
 
                     <WrapPanel Grid.Row="0">
-                        <Button x:Name="MultiViewStartBtn" Content="▶ 실시간 스캔 뷰 (촬영 + 영역표시)" FontWeight="Bold"
-                                Foreground="#FF1A5276" Click="MultiViewStart_Click"
-                                ToolTip="연속 촬영하며 화면에 영역을 표시합니다: 녹색=판독완료, 주황=미판독, 빨강=여러 번 실패(손상 의심). 판독된 값은 목록에 자동 수집됩니다."/>
+                        <Button x:Name="MultiStartBtn" Content="▶ 스캔 시작" FontWeight="Bold"
+                                Foreground="#FF1A5276" Click="MultiStart_Click"
+                                ToolTip="시작 후 트리거를 당길 때마다 1회씩 판독됩니다. 중복은 행을 추가하지 않고 횟수만 증가하며, 신규 바코드만 비프가 울립니다."/>
                         <Button x:Name="MultiStopBtn" Content="■ 정지" IsEnabled="False" Click="MultiStop_Click"/>
                         <Button Content="목록 지우기" Click="MultiClear_Click"/>
                         <Button Content="CSV 내보내기" Click="MultiExport_Click"/>
                     </WrapPanel>
 
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,6">
-                        <TextBlock Text="총 읽음: "/>
-                        <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50"/>
-                        <TextBlock Text="   고유 바코드: "/>
-                        <TextBlock x:Name="MultiUniqueText" Text="0" FontWeight="Bold" MinWidth="50"/>
-                        <TextBlock Text="   ※ 스캔 뷰 시작 후 트리거를 당기면 촬영+판독됩니다. 중복 자동 제거, 신규만 비프." Foreground="Gray"/>
-                    </StackPanel>
+                    <DockPanel Grid.Row="1" Margin="4,4">
+                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="BigCountText" Text="0" FontSize="56" FontWeight="Bold"
+                                       Foreground="#FFE67E00" VerticalAlignment="Center"/>
+                            <TextBlock Text="고유 판독 수" FontSize="14" FontWeight="Bold" Foreground="#FFE67E00"
+                                       VerticalAlignment="Bottom" Margin="8,0,24,10"/>
+                            <TextBlock Text="총 읽음: " VerticalAlignment="Center"/>
+                            <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="※ 트리거를 당길 때마다 1회 판독됩니다. 중복은 횟수만 증가(무음), 신규만 비프."
+                                   Foreground="Gray" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </DockPanel>
 
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="5*"/>
-                            <ColumnDefinition Width="4*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <GroupBox Grid.Column="0" Header="실시간 뷰 (빛반사·거리를 눈으로 확인하며 위치를 맞추세요)">
-                            <Grid Background="#FF1E1E1E">
-                                <Image x:Name="MultiPreview" Stretch="Uniform"/>
-                                <TextBlock x:Name="MultiPreviewHint" Foreground="#FF9E9E9E" TextWrapping="Wrap"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"
-                                           Text="[실시간 스캔 뷰] 시작 후 트리거를 당기면&#10;촬영 화면이 표시되고 바코드가 판독됩니다"/>
-                                <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="14,6,0,0">
-                                    <TextBlock x:Name="BigCountText" Text="0" FontSize="76" FontWeight="Bold"
-                                               Foreground="#FFFFD400">
-                                        <TextBlock.Effect>
-                                            <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="2"/>
-                                        </TextBlock.Effect>
-                                    </TextBlock>
-                                    <TextBlock Text="고유 판독 수" FontSize="15" FontWeight="Bold" Foreground="#FFFFD400" Margin="4,-8,0,0">
-                                        <TextBlock.Effect>
-                                            <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="1"/>
-                                        </TextBlock.Effect>
-                                    </TextBlock>
-                                </StackPanel>
-                            </Grid>
-                        </GroupBox>
-
-                        <GroupBox Grid.Column="1" Header="판독 목록">
-                            <DataGrid x:Name="MultiGrid" AutoGenerateColumns="False" IsReadOnly="True"
-                                      CanUserAddRows="False">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="#" Binding="{Binding No}" Width="40"/>
-                                    <DataGridTextColumn Header="시간" Binding="{Binding TimeText}" Width="85"/>
-                                    <DataGridTextColumn Header="심볼로지" Binding="{Binding Symbology}" Width="110"/>
-                                    <DataGridTextColumn Header="데이터" Binding="{Binding Data}" Width="*"/>
-                                    <DataGridTextColumn Header="횟수" Binding="{Binding Count}" Width="50"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </GroupBox>
-                    </Grid>
+                    <GroupBox Grid.Row="2" Header="판독 목록 (중복 제외, 응용식별자별 분리)">
+                        <DataGrid x:Name="MultiGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" FontSize="13"
+                                  GridLinesVisibility="All"
+                                  HorizontalGridLinesBrush="#FFDDDDDD" VerticalGridLinesBrush="#FFDDDDDD"
+                                  BorderBrush="#FFDDDDDD" RowHeaderWidth="0" RowHeight="24">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="#" Binding="{Binding No}" Width="40"/>
+                                <DataGridTextColumn Header="시간" Binding="{Binding TimeText}" Width="80"/>
+                                <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" Width="130"/>
+                                <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" Width="100"/>
+                                <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" Width="95"/>
+                                <DataGridTextColumn Header="EXP" Binding="{Binding Exp}" Width="95"/>
+                                <DataGridTextColumn Header="PN" Binding="{Binding Pn}" Width="110"/>
+                                <DataGridTextColumn Header="SN" Binding="{Binding Sn}" Width="60"/>
+                                <DataGridTextColumn Header="UPN" Binding="{Binding Upn}" Width="120"/>
+                                <DataGridTextColumn Header="원본" Binding="{Binding Raw}" Width="*"/>
+                                <DataGridTextColumn Header="횟수" Binding="{Binding Count}" Width="50"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </GroupBox>
                 </Grid>
             </TabItem>
         </TabControl>

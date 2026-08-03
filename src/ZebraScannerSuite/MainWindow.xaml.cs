@@ -39,15 +39,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<MultiScanRow> _multiRows = new();
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
     private int _multiTotal;
-    // 트리거 버스트 카운트 (트리거 당긴 시점부터 중복 제외 고유 수)
-    private readonly HashSet<string> _burstSeen = new();
-    private DateTime _lastMultiDecode = DateTime.MinValue;
-
-    // 실시간 스캔 뷰 (연속 촬영 표시 + 프레임 사이 하드웨어 판독)
-    private bool _multiViewRunning;
-    private int _mvBusy;
-    private DateTime _mvLastFrame = DateTime.MinValue;
-    private readonly DispatcherTimer _mvWatchdog = new() { Interval = TimeSpan.FromSeconds(2) };
+    private bool _multiActive; // 멀티 스캔 수신 중
 
     public MainWindow()
     {
@@ -55,7 +47,6 @@ public partial class MainWindow : Window
         FieldsGrid.ItemsSource = _fields;
         MultiGrid.ItemsSource = _multiRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
-        _mvWatchdog.Tick += MvWatchdog_Tick;
     }
 
     // ==================== 초기화 / 종료 ====================
@@ -111,7 +102,7 @@ public partial class MainWindow : Window
         {
             if (_scanner?.ActiveScanner is { } s)
             {
-                if (_multiViewRunning) _scanner.SetBeepAfterGoodDecode(s.Id, true);
+                if (_multiActive) _scanner.SetBeepAfterGoodDecode(s.Id, true);
                 // 촬영 모드로 남겨두면 다음 실행/다른 프로그램에서 스캔이 안 되므로 디코드 모드로 복원
                 _scanner.SetCaptureBarcodeMode(s.Id);
             }
@@ -202,7 +193,7 @@ public partial class MainWindow : Window
 
         if (MainTabs.SelectedIndex == 1) // Multi / Continuous 탭
         {
-            if (_multiViewRunning) AddMultiScan(b);
+            if (_multiActive) AddMultiScan(b);
             return;
         }
         HandleScanTab(b);
@@ -272,14 +263,6 @@ public partial class MainWindow : Window
     {
         if (_scanner?.ActiveScanner is { } d) _scanner.ReleaseTrigger(d.Id);
         _imageTimeout.Stop();
-
-        // 실시간 스캔 뷰: 프레임 분석 + 영역 표시 + 재촬영 루프
-        if (_multiViewRunning && MainTabs.SelectedIndex == 1)
-        {
-            _mvLastFrame = DateTime.Now;
-            ProcessMultiViewFrame(imageBytes);
-            return;
-        }
 
         ShowPreview(imageBytes);
 
@@ -614,20 +597,47 @@ public partial class MainWindow : Window
     }
 
     // ==================== Multi / Continuous 탭 ====================
+    // 디코드 모드 리스너: 트리거를 당길 때마다 스캐너 하드웨어가 1회 판독.
+    // 중복은 행 추가 없이 횟수만 증가(무음), 신규 바코드만 비프.
 
-    private void MultiStop_Click(object sender, RoutedEventArgs e) => MultiViewStop();
+    private void MultiStart_Click(object sender, RoutedEventArgs e)
+    {
+        if (_scanner?.ActiveScanner is not { } dev)
+        {
+            SetStatus("연결된 스캐너가 없습니다.");
+            return;
+        }
+        _multiActive = true;
+        MultiStartBtn.IsEnabled = false;
+        MultiStopBtn.IsEnabled = true;
+        Task.Run(() =>
+        {
+            _scanner.SetBeepAfterGoodDecode(dev.Id, false); // 신규만 앱 비프
+            _scanner.SetCaptureBarcodeMode(dev.Id);          // 디코드 모드 (트리거는 사용자가 직접)
+        });
+        SetStatus("멀티 스캔 대기 - 트리거를 당길 때마다 1회 판독됩니다 (신규만 비프, 중복은 횟수 증가)");
+    }
+
+    private void MultiStop_Click(object sender, RoutedEventArgs e) => MultiStop();
+
+    private void MultiStop()
+    {
+        bool wasActive = _multiActive;
+        _multiActive = false;
+        MultiStartBtn.IsEnabled = true;
+        MultiStopBtn.IsEnabled = false;
+        if (!wasActive) return;
+        if (_scanner?.ActiveScanner is { } dev)
+            _scanner.SetBeepAfterGoodDecode(dev.Id, true);
+        EnsureScannerMode("멀티 스캔 정지"); // 일반 설정(강제 스캔 등)으로 복원
+        SetStatus($"멀티 스캔 정지 - 고유 {_multiSeen.Count}건 / 총 {_multiTotal}회");
+    }
 
     private void AddMultiScan(BarcodeData b)
     {
         _multiTotal++;
         string key = b.Symbology + "|" + b.Text;
 
-        // 트리거 버스트 카운트: 2.5초 이상 판독 공백 후 첫 판독 = 새 버스트(트리거) 시작
-        var now = DateTime.Now;
-        if ((now - _lastMultiDecode).TotalSeconds > 2.5) _burstSeen.Clear();
-        _lastMultiDecode = now;
-        _burstSeen.Add(key);
-        BigCountText.Text = _burstSeen.Count.ToString();
         if (_multiSeen.TryGetValue(key, out var row))
         {
             row.Count++;
@@ -635,12 +645,19 @@ public partial class MainWindow : Window
         }
         else
         {
+            var ai = Gs1Parser.Parse(b.Text);
             row = new MultiScanRow
             {
                 No = _multiRows.Count + 1,
-                TimeText = b.Time.ToString("HH:mm:ss.fff"),
-                Symbology = b.Symbology,
-                Data = b.Text,
+                TimeText = b.Time.ToString("HH:mm:ss"),
+                Gtin = ai.GetValueOrDefault("01", ""),
+                Lot = ai.GetValueOrDefault("10", ""),
+                Mfg = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("11", "")),
+                Exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", "")),
+                Pn = ai.GetValueOrDefault("240", ""),
+                Sn = ai.GetValueOrDefault("21", ""),
+                Upn = ai.GetValueOrDefault("30", ""),
+                Raw = b.Text,
             };
             _multiSeen[key] = row;
             _multiRows.Add(row);
@@ -650,121 +667,15 @@ public partial class MainWindow : Window
                 Task.Run(() => _scanner.Beep(bdev.Id, 0));
         }
         MultiTotalText.Text = _multiTotal.ToString();
-        MultiUniqueText.Text = _multiSeen.Count.ToString();
-    }
-
-    // ---------- 실시간 스캔 뷰 (연속 촬영 표시 + 프레임 사이 하드웨어 판독) ----------
-
-    private void MultiViewStart_Click(object sender, RoutedEventArgs e)
-    {
-        if (_scanner?.ActiveScanner is not { } dev)
-        {
-            SetStatus("연결된 스캐너가 없습니다.");
-            return;
-        }
-        _multiViewRunning = true;
-        _burstSeen.Clear();
-        BigCountText.Text = "0";
-        _mvLastFrame = DateTime.Now;
-        MultiViewStartBtn.IsEnabled = false;
-        MultiStopBtn.IsEnabled = true;
-        MultiPreviewHint.Visibility = Visibility.Collapsed;
-        _mvWatchdog.Start();
-        SetStatus("실시간 스캔 뷰 대기 - 트리거를 당기면 촬영되고 바코드가 판독됩니다.");
-        Task.Run(() =>
-        {
-            _scanner.SetBeepAfterGoodDecode(dev.Id, false); // 신규만 앱 비프
-            _scanner.SetCaptureImageMode(dev.Id); // 촬영 대기만 (트리거는 사용자가 직접)
-        });
-    }
-
-    private void MultiViewStop()
-    {
-        if (!_multiViewRunning) return;
-        _multiViewRunning = false;
-        _mvWatchdog.Stop();
-        MultiViewStartBtn.IsEnabled = true;
-        MultiStopBtn.IsEnabled = false;
-        if (_scanner?.ActiveScanner is { } dev)
-        {
-            _scanner.ReleaseTrigger(dev.Id);
-            _scanner.SetBeepAfterGoodDecode(dev.Id, true);
-        }
-        EnsureScannerMode("스캔 뷰 정지"); // 일반 설정(디코드/강제 스캔)에 맞게 복원
-        SetStatus($"스캔 뷰 정지 - 고유 {_multiSeen.Count}건 수집");
-    }
-
-    private void MvWatchdog_Tick(object? sender, EventArgs e)
-    {
-        // 판독 윈도우 진행 중이 아닌데 프레임이 2초 이상 안 오면 촬영 루프 재가동
-        if (_multiViewRunning && _mvBusy == 0 && (DateTime.Now - _mvLastFrame).TotalSeconds > 2)
-            RearmMultiView();
-    }
-
-    /// <summary>스캔 뷰 프레임 처리: ① 화면 즉시 표시(오버레이 없음) →
-    /// ② 하드웨어 디코더로 짧은 판독 윈도우 수행(소프트웨어 디코드는 다중 소형 DM에
-    /// 부정확해 제거) → ③ 다음 촬영 재무장. 판독 값은 목록/카운트에 반영.</summary>
-    private void ProcessMultiViewFrame(byte[] bytes)
-    {
-        ShowMultiPreview(bytes); // 원본 프레임 그대로 즉시 표시
-
-        if (Interlocked.Exchange(ref _mvBusy, 1) == 1) return; // 사이클 겹침 방지
-        Task.Run(async () =>
-        {
-            try
-            {
-                if (_multiViewRunning && _scanner?.ActiveScanner is { } dev)
-                {
-                    // 하드웨어 판독 윈도우 (같은 심볼은 스캐너의 same-symbol timeout으로
-                    // 자동 회피되어 매 사이클 다른 바코드가 순차적으로 읽힌다)
-                    var b = await TryHardwareDecodeAsync(dev.Id, 700);
-                    if (b != null)
-                        await Dispatcher.BeginInvoke(() => AddMultiScan(b));
-                }
-            }
-            catch { }
-            finally
-            {
-                Interlocked.Exchange(ref _mvBusy, 0);
-                RearmMultiView();
-            }
-        });
-    }
-
-    /// <summary>다음 촬영 대기 상태로 복귀 (촬영 모드만 무장, 트리거는 사용자가 직접 당김)</summary>
-    private void RearmMultiView()
-    {
-        if (!_multiViewRunning || _scanner?.ActiveScanner is not { } dev) return;
-        Task.Run(() =>
-        {
-            Thread.Sleep(60);
-            if (_multiViewRunning) _scanner.SetCaptureImageMode(dev.Id);
-        });
-    }
-
-    private void ShowMultiPreview(byte[] png)
-    {
-        if (png.Length == 0) return;
-        var bmp = new BitmapImage();
-        using (var ms = new MemoryStream(png))
-        {
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.StreamSource = ms;
-            bmp.EndInit();
-        }
-        bmp.Freeze();
-        MultiPreview.Source = bmp;
+        BigCountText.Text = _multiSeen.Count.ToString();
     }
 
     private void MultiClear_Click(object sender, RoutedEventArgs e)
     {
         _multiRows.Clear();
         _multiSeen.Clear();
-        _burstSeen.Clear();
         _multiTotal = 0;
         MultiTotalText.Text = "0";
-        MultiUniqueText.Text = "0";
         BigCountText.Text = "0";
     }
 
@@ -779,9 +690,9 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog(this) != true) return;
         var sb = new StringBuilder();
-        sb.AppendLine("No,Time,Symbology,Data,Count");
+        sb.AppendLine("No,Time,GTIN,LOT,MFG,EXP,PN,SN,UPN,Raw,Count");
         foreach (var r in _multiRows)
-            sb.AppendLine($"{r.No},{r.TimeText},{Csv(r.Symbology)},{Csv(r.Data)},{r.Count}");
+            sb.AppendLine($"{r.No},{r.TimeText},{Csv(r.Gtin)},{Csv(r.Lot)},{Csv(r.Mfg)},{Csv(r.Exp)},{Csv(r.Pn)},{Csv(r.Sn)},{Csv(r.Upn)},{Csv(r.Raw)},{r.Count}");
         File.WriteAllText(dlg.FileName, sb.ToString(), new UTF8Encoding(true));
         SetStatus("CSV 저장 완료: " + dlg.FileName);
     }
@@ -794,7 +705,7 @@ public partial class MainWindow : Window
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!IsLoaded || e.OriginalSource != MainTabs) return;
-        if (MainTabs.SelectedIndex != 1 && _multiViewRunning)
-            MultiViewStop();
+        if (MainTabs.SelectedIndex != 1 && _multiActive)
+            MultiStop();
     }
 }
