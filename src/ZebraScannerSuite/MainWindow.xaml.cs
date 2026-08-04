@@ -278,10 +278,10 @@ public partial class MainWindow : Window
         {
             var mScan = _multiImageScan;
             _multiImageScan = null;
-            var settingsSnapshot = _settings;
+            var mSettings = _settings;
             Enqueue(async () =>
             {
-                string path = ImageSaveService.Save(imageBytes, mScan.Text, mScan.Symbology, "", settingsSnapshot);
+                string path = ImageSaveService.Save(imageBytes, mScan.Text, mScan.Symbology, "", mSettings);
                 await Dispatcher.BeginInvoke(() => SetStatus("사진 저장 완료: " + path));
             });
             return;
