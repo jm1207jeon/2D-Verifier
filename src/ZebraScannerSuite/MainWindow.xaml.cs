@@ -51,6 +51,7 @@ public partial class MainWindow : Window
     private DateTime _lastHostSwitch = DateTime.MinValue; // SNAPI 자동 전환 반복 방지
     private readonly DispatcherTimer _scannerWatchdog = new() { Interval = TimeSpan.FromSeconds(10) };
     private bool _watchdogBusy;
+    private int _scannerModeBusy; // EnsureScannerMode 실행 중 표시 (워치독과의 동시 SDK 호출 방지)
 
     public MainWindow()
     {
@@ -66,7 +67,7 @@ public partial class MainWindow : Window
     /// (수동 [스캐너 새로고침] 버튼 대체 - PnP 이벤트를 놓친 경우의 안전망)</summary>
     private async void ScannerWatchdog_Tick(object? sender, EventArgs e)
     {
-        if (_watchdogBusy) return;
+        if (_watchdogBusy || _scannerModeBusy != 0) return; // EnsureScannerMode 진행 중이면 충돌 방지 위해 건너뜀
         _watchdogBusy = true;
         try
         {
@@ -131,6 +132,8 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        _scannerWatchdog.Stop();
+        _imageTimeout.Stop();
         try
         {
             CollectSettingsFromUi();
@@ -398,8 +401,12 @@ public partial class MainWindow : Window
         if (_scanner is not { IsOpen: true }) return;
         bool multiTab = Dispatcher.Invoke(() => MainTabs.SelectedIndex == 1);
         bool forceScan = !multiTab && Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true);
+        if (System.Threading.Interlocked.CompareExchange(ref _scannerModeBusy, 1, 0) != 0)
+            return; // 이미 다른 EnsureScannerMode 재시도 루프가 진행 중 (탭 전환/PnP 이벤트 중첩 방지)
         Task.Run(() =>
         {
+          try
+          {
             for (int attempt = 1; attempt <= 5; attempt++)
             {
                 var dev = _scanner.ActiveScanner;
@@ -419,8 +426,11 @@ public partial class MainWindow : Window
                         _lastHostSwitch = DateTime.Now;
                         Dispatcher.BeginInvoke(() => SetStatus(
                             $"{reason}: 스캐너를 SNAPI(이미징) 모드로 자동 전환 중... 재부팅 후 자동 재연결됩니다."));
-                        _scanner.SwitchHostMode(dev.Id, _settings.PreferredHostMode, permanent: true);
-                        return;
+                        bool switched = _scanner.SwitchHostMode(dev.Id, _settings.PreferredHostMode, permanent: true);
+                        if (switched) return; // 재부팅 → PnP 재연결 이벤트가 다음 EnsureScannerMode를 부름
+                        // 전환 명령 자체가 실패 - 20초 쿨다운 후 워치독이 자동 재시도하도록 남겨두고 계속 진행
+                        Dispatcher.BeginInvoke(() => SetStatus(
+                            $"{reason}: SNAPI 모드 전환 명령 실패 - 잠시 후 자동 재시도됩니다."));
                     }
 
                     // Caps Lock 토글의 원인인 HID 키보드 에뮬레이터는 항상 끈다 (자체 웨지로 대체)
@@ -442,6 +452,8 @@ public partial class MainWindow : Window
             }
             Dispatcher.BeginInvoke(() => SetStatus(
                 $"{reason}: 스캐너 모드 설정 실패 - USB를 재연결하면 자동으로 복구됩니다."));
+          }
+          finally { System.Threading.Interlocked.Exchange(ref _scannerModeBusy, 0); }
         });
     }
 
@@ -848,8 +860,19 @@ public partial class MainWindow : Window
         sb.AppendLine("No,Time,GTIN,LOT,MFG,EXP,PN,SN,UPN,Raw,Count");
         foreach (var r in _multiRows)
             sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Gtin)},{CsvText(r.Lot)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Pn)},{CsvText(r.Sn)},{CsvText(r.Upn)},{CsvText(r.Raw)},{r.Count}");
-        File.WriteAllText(dlg.FileName, sb.ToString(), new UTF8Encoding(true));
-        SetStatus("CSV 저장 완료: " + dlg.FileName);
+        try
+        {
+            File.WriteAllText(dlg.FileName, sb.ToString(), new UTF8Encoding(true));
+            SetStatus("CSV 저장 완료: " + dlg.FileName);
+        }
+        catch (IOException)
+        {
+            SetStatus("CSV 저장 실패 - 파일이 다른 프로그램(엑셀 등)에서 열려 있는지 확인 후 다시 시도하세요.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("CSV 저장 실패: " + ex.Message);
+        }
     }
 
     private static string Csv(string s) =>

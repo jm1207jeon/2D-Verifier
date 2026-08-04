@@ -76,15 +76,22 @@ public static class ImageSaveService
         }
 
         bool hasSeq = Regex.IsMatch(rule, @"\{SEQ(:\d+)?\}", RegexOptions.IgnoreCase);
+
+        // 폴더 안 파일 목록을 한 번만 읽어 메모리에서 중복 검사 (매 저장마다 File.Exists를 반복
+        // 호출하면 폴더에 파일이 많이 쌓일수록, 특히 네트워크 드라이브에서 느려진다)
+        var existing = Directory.Exists(dir)
+            ? new HashSet<string>(Directory.EnumerateFiles(dir).Select(Path.GetFileName)!, StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         for (int seq = 1; seq <= 99999; seq++)
         {
-            string candidate = Path.Combine(dir, Expand(seq) + ext);
-            if (!File.Exists(candidate)) return candidate;
+            string name = Expand(seq) + ext;
+            if (!existing.Contains(name)) return Path.Combine(dir, name);
             if (!hasSeq)
             {
                 // SEQ 토큰이 없으면 뒤에 _(n) 부여
-                candidate = Path.Combine(dir, Expand(seq) + $"_({seq})" + ext);
-                if (!File.Exists(candidate)) return candidate;
+                name = Expand(seq) + $"_({seq})" + ext;
+                if (!existing.Contains(name)) return Path.Combine(dir, name);
             }
         }
         return Path.Combine(dir, Guid.NewGuid().ToString("N") + ext);

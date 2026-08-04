@@ -132,7 +132,9 @@ public static class Gs1Parser
             // SN은 최대 2자리 숫자이고 UPN은 항상 'M'으로 시작하므로,
             // 값 안에 "30M"이 보이면 GS 종결 여부와 무관하게 30을 AI로 취급한다.
             // (라벨 끝에 잉여 GS가 붙어 있어도 분리되어야 함)
-            if (ai == "21")
+            // 길이 상한(40자)은 표준 GS1 라벨의 우연한 오분리 위험을 줄이기 위한 안전장치
+            // (실사용 SN+UPN 조합은 대부분 20자 이내).
+            if (ai == "21" && value.Length <= 40)
             {
                 var m = Regex.Match(value, @"^(\d{1,2})30(M.*)$");
                 if (m.Success)
@@ -148,7 +150,8 @@ public static class Gs1Parser
             // 특례 B: PN(240) 값 끝에 "21 + SN(1~2자리) [+ 30 + M…]" 이 붙은 형태
             //  예) "24001-0854211" → PN=01-0854, SN=1
             //  greedy(.+)로 가장 오른쪽의 21을 찾으므로 값 중간의 '21'과 혼동하지 않음
-            if (ai == "240")
+            //  길이 상한(40자)은 표준 GS1 PN 값 안에 우연히 패턴이 섞여 오분리되는 위험을 줄인다.
+            if (ai == "240" && value.Length <= 40)
             {
                 // 30+M(UPN) 패턴은 확실한 근거이므로 GS 종결 여부와 무관하게 분리
                 var m = Regex.Match(value, @"^(.+)21(\d{1,2})30(M.*)$");
@@ -214,8 +217,12 @@ public static class Gs1Parser
     {
         if (v.Length != 6 || !v.All(char.IsDigit)) return v;
         int yy = int.Parse(v[..2]);
-        int century = yy <= 50 ? 2000 : 1900; // GS1 규칙 근사
-        string y = (century + yy).ToString();
+        // 현재 연도 기준 슬라이딩 윈도우([-49, +50]년)로 세기를 판단해 2050년 이후에도 안전하게 동작
+        int now = DateTime.Now.Year;
+        int year = now / 100 * 100 + yy;
+        if (year < now - 49) year += 100;
+        else if (year > now + 50) year -= 100;
+        string y = year.ToString();
         string mm = v[2..4], dd = v[4..6];
         return dd == "00" ? $"{y}-{mm}" : $"{y}-{mm}-{dd}";
     }

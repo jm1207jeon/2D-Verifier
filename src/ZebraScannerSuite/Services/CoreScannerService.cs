@@ -82,9 +82,9 @@ public sealed class CoreScannerService : IDisposable
 
     public void RefreshScanners()
     {
-        if (_core == null) return;
         lock (_lock)
         {
+            if (_core == null) return; // Dispose와의 경쟁 방지 - null 체크를 lock 안에서 재확인
             Scanners.Clear();
             int[] ids = new int[255];
             _core.GetScanners(out short num, ids, out string outXml, out int status);

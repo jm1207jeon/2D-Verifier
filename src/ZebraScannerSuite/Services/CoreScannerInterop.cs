@@ -168,6 +168,8 @@ internal sealed class CoreScannerCom : IDisposable
     {
         try { if (_cp != null && _cookie != 0) _cp.Unadvise(_cookie); }
         catch { }
+        try { if (_cp != null) Marshal.ReleaseComObject(_cp); }
+        catch { }
         _cp = null;
         try { Marshal.FinalReleaseComObject(Api); } catch { }
     }

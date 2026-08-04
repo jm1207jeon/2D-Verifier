@@ -87,7 +87,7 @@
                         <GroupBox Grid.Row="2" Header="캡처 이미지">
                             <Grid x:Name="ImageHost" Background="#FF1E1E1E">
                                 <Image x:Name="PreviewImage" Stretch="Uniform"/>
-                                <TextBlock x:Name="NoImageText" Text="이미지 없음 - ② 모드 또는 강제 스캔에서 트리거를 당기면 촬영됩니다"
+                                <TextBlock x:Name="NoImageText" Text="이미지 없음 - '바코드 리딩 + 이미지 캡처' 모드 또는 강제 스캔에서 트리거를 당기면 촬영됩니다"
                                            Foreground="#FF9E9E9E" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Grid>
                         </GroupBox>
