@@ -265,7 +265,7 @@ public partial class MainWindow : Window
         UpdateBusy();
         Task.Run(() =>
         {
-            Thread.Sleep(80); // 디코드 세션 종료 대기
+            Thread.Sleep(35); // 디코드 세션 종료 대기 (최소화 - 더 줄이면 촬영 명령이 무시됨)
             bool ok = _scanner!.CaptureImage(dev.Id);
             Interlocked.Decrement(ref _pendingJobs);
             Dispatcher.BeginInvoke(() =>
@@ -724,7 +724,7 @@ public partial class MainWindow : Window
         _multiImageAt = DateTime.Now;
         Task.Run(() =>
         {
-            Thread.Sleep(80); // 디코드 세션 종료 대기
+            Thread.Sleep(35); // 디코드 세션 종료 대기 (최소화)
             bool ok = _scanner!.CaptureImage(dev.Id);
             if (!ok) Dispatcher.BeginInvoke(() => _multiImageScan = null);
         });
