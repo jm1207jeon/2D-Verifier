@@ -146,10 +146,6 @@
                     </Grid.RowDefinitions>
 
                     <WrapPanel Grid.Row="0">
-                        <Button x:Name="MultiStartBtn" Content="▶ 스캔 시작" FontWeight="Bold"
-                                Foreground="#FF1A5276" Click="MultiStart_Click"
-                                ToolTip="시작 후 트리거를 당길 때마다 1회씩 판독됩니다. 중복은 행을 추가하지 않고 횟수만 증가하며, 신규 바코드만 비프가 울립니다."/>
-                        <Button x:Name="MultiStopBtn" Content="■ 정지" IsEnabled="False" Click="MultiStop_Click"/>
                         <Button Content="목록 지우기" Click="MultiClear_Click"/>
                         <Button Content="CSV 내보내기" Click="MultiExport_Click"/>
                     </WrapPanel>
@@ -163,7 +159,7 @@
                             <TextBlock Text="총 읽음: " VerticalAlignment="Center"/>
                             <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <TextBlock Text="※ 트리거를 당길 때마다 1회 판독됩니다. 중복은 횟수만 증가(무음), 신규만 비프."
+                        <TextBlock Text="※ 이 탭에 들어오면 자동으로 준비됩니다. 트리거를 당길 때마다 1회 판독, 중복은 횟수만 증가(무음), 신규만 비프."
                                    Foreground="Gray" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     </DockPanel>
 
@@ -181,10 +177,24 @@
                                 <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" Width="95"/>
                                 <DataGridTextColumn Header="EXP" Binding="{Binding Exp}" Width="95"/>
                                 <DataGridTextColumn Header="PN" Binding="{Binding Pn}" Width="110"/>
-                                <DataGridTextColumn Header="SN" Binding="{Binding Sn}" Width="60"/>
+                                <DataGridTextColumn Header="SN" Binding="{Binding Sn}" Width="60">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="TextAlignment" Value="Right"/>
+                                            <Setter Property="Padding" Value="0,0,6,0"/>
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                                 <DataGridTextColumn Header="UPN" Binding="{Binding Upn}" Width="120"/>
                                 <DataGridTextColumn Header="원본" Binding="{Binding Raw}" Width="*"/>
-                                <DataGridTextColumn Header="횟수" Binding="{Binding Count}" Width="50"/>
+                                <DataGridTextColumn Header="횟수" Binding="{Binding Count}" Width="50">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="TextAlignment" Value="Right"/>
+                                            <Setter Property="Padding" Value="0,0,6,0"/>
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                             </DataGrid.Columns>
                         </DataGrid>
                     </GroupBox>

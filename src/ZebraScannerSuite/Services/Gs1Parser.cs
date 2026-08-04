@@ -97,8 +97,10 @@ public static class Gs1Parser
                 pos = gs < 0 ? s.Length : gs;
             }
 
-            // 특례: AI 21(SN)은 1~2자리 숫자이고, 바로 이어서 AI 30 + 'M…'(UPN)이
-            // GS 없이 붙는 라벨 형식 지원 → SN과 UPN을 분리
+            // ---- 라벨 특례: GS 구분자 없이 뒤에 SN(21)/UPN(30)이 이어 붙는 패턴 분리 ----
+            // SN은 1~2자리 숫자, UPN은 'M'으로 시작한다는 고정 규칙 기반.
+
+            // 특례 A: AI 21 값이 "SN + 30 + M…" 형태 → SN과 UPN 분리
             if (ai == "21")
             {
                 var m = Regex.Match(value, @"^(\d{1,2})30(M.*)$");
@@ -107,6 +109,33 @@ public static class Gs1Parser
                     tokens.Add(new Gs1Token("21", true));
                     tokens.Add(new Gs1Token(m.Groups[1].Value, false));
                     tokens.Add(new Gs1Token("30", true));
+                    tokens.Add(new Gs1Token(m.Groups[2].Value, false));
+                    continue;
+                }
+            }
+
+            // 특례 B: PN(240)/LOT(10) 값 끝에 "21 + SN(1~2자리) [+ 30 + M…]" 이 붙은 형태
+            //  예) "24001-0854211" → PN=01-0854, SN=1
+            //  greedy(.+)로 가장 오른쪽의 21을 찾으므로 값 중간의 '21'과 혼동하지 않음
+            if (ai is "240" or "10")
+            {
+                var m = Regex.Match(value, @"^(.+)21(\d{1,2})30(M.*)$");
+                if (m.Success)
+                {
+                    tokens.Add(new Gs1Token(ai, true));
+                    tokens.Add(new Gs1Token(m.Groups[1].Value, false));
+                    tokens.Add(new Gs1Token("21", true));
+                    tokens.Add(new Gs1Token(m.Groups[2].Value, false));
+                    tokens.Add(new Gs1Token("30", true));
+                    tokens.Add(new Gs1Token(m.Groups[3].Value, false));
+                    continue;
+                }
+                m = Regex.Match(value, @"^(.+)21(\d{1,2})$");
+                if (m.Success)
+                {
+                    tokens.Add(new Gs1Token(ai, true));
+                    tokens.Add(new Gs1Token(m.Groups[1].Value, false));
+                    tokens.Add(new Gs1Token("21", true));
                     tokens.Add(new Gs1Token(m.Groups[2].Value, false));
                     continue;
                 }

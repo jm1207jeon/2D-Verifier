@@ -314,10 +314,15 @@ public partial class MainWindow : Window
     /// - 강제 스캔 ON → 촬영 모드 / OFF → 디코드 모드로 확정
     /// - 이전 세션이 촬영 모드로 남긴 상태, 시작·재연결 직후 명령 실패를 복구
     /// - 키보드 에뮬레이터(Caps Lock 토글 원인)도 설정에 따라 재적용</summary>
+    /// <summary>현재 탭/설정에 맞는 스캐너 상태를 보장한다 (최대 5회 재시도).
+    /// - 멀티 탭: 디코드 모드 + 스캐너 비프 억제(신규만 앱 비프)
+    /// - 일반 탭: 강제 스캔 ON → 촬영 모드 / OFF → 디코드 모드, 비프 복원
+    /// 탭 전환·시작·재연결 시 호출되어 인식 불능 상태를 복구한다.</summary>
     private void EnsureScannerMode(string reason)
     {
         if (_scanner is not { IsOpen: true }) return;
-        bool forceScan = Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true);
+        bool multiTab = Dispatcher.Invoke(() => MainTabs.SelectedIndex == 1);
+        bool forceScan = !multiTab && Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true);
         Task.Run(() =>
         {
             for (int attempt = 1; attempt <= 5; attempt++)
@@ -334,13 +339,14 @@ public partial class MainWindow : Window
                     // Caps Lock 토글의 원인인 HID 키보드 에뮬레이터는 항상 끈다 (자체 웨지로 대체)
                     _scanner.SetKeyboardEmulator(false);
                     _scanner.ScanEnable(dev.Id);
+                    _scanner.SetBeepAfterGoodDecode(dev.Id, !multiTab); // 멀티 탭: 중복 무음, 신규만 앱 비프
                     bool ok = forceScan
                         ? _scanner.SetCaptureImageMode(dev.Id)
                         : _scanner.SetCaptureBarcodeMode(dev.Id);
                     if (ok)
                     {
                         Dispatcher.BeginInvoke(() => SetStatus(
-                            $"{reason}: {(forceScan ? "강제 스캔(트리거=촬영) 모드" : "바코드 디코드 모드")} 준비 완료"));
+                            $"{reason}: {(multiTab ? "멀티 스캔(트리거=1회 판독)" : forceScan ? "강제 스캔(트리거=촬영)" : "바코드 디코드")} 모드 준비 완료"));
                         return;
                     }
                 }
@@ -600,37 +606,18 @@ public partial class MainWindow : Window
     // 디코드 모드 리스너: 트리거를 당길 때마다 스캐너 하드웨어가 1회 판독.
     // 중복은 행 추가 없이 횟수만 증가(무음), 신규 바코드만 비프.
 
-    private void MultiStart_Click(object sender, RoutedEventArgs e)
+    /// <summary>멀티 탭 진입 시 자동 준비 (버튼 없이 트리거만으로 동작)</summary>
+    private void MultiArm()
     {
-        if (_scanner?.ActiveScanner is not { } dev)
-        {
-            SetStatus("연결된 스캐너가 없습니다.");
-            return;
-        }
         _multiActive = true;
-        MultiStartBtn.IsEnabled = false;
-        MultiStopBtn.IsEnabled = true;
-        Task.Run(() =>
-        {
-            _scanner.SetBeepAfterGoodDecode(dev.Id, false); // 신규만 앱 비프
-            _scanner.SetCaptureBarcodeMode(dev.Id);          // 디코드 모드 (트리거는 사용자가 직접)
-        });
-        SetStatus("멀티 스캔 대기 - 트리거를 당길 때마다 1회 판독됩니다 (신규만 비프, 중복은 횟수 증가)");
+        EnsureScannerMode("멀티 스캔");
     }
 
-    private void MultiStop_Click(object sender, RoutedEventArgs e) => MultiStop();
-
-    private void MultiStop()
+    /// <summary>멀티 탭 이탈 시 일반 스캔 설정으로 복귀</summary>
+    private void MultiDisarm()
     {
-        bool wasActive = _multiActive;
         _multiActive = false;
-        MultiStartBtn.IsEnabled = true;
-        MultiStopBtn.IsEnabled = false;
-        if (!wasActive) return;
-        if (_scanner?.ActiveScanner is { } dev)
-            _scanner.SetBeepAfterGoodDecode(dev.Id, true);
-        EnsureScannerMode("멀티 스캔 정지"); // 일반 설정(강제 스캔 등)으로 복원
-        SetStatus($"멀티 스캔 정지 - 고유 {_multiSeen.Count}건 / 총 {_multiTotal}회");
+        EnsureScannerMode("일반 스캔 복귀");
     }
 
     private void AddMultiScan(BarcodeData b)
@@ -642,6 +629,8 @@ public partial class MainWindow : Window
         {
             row.Count++;
             MultiGrid.Items.Refresh();
+            MultiGrid.ScrollIntoView(row);
+            FlashRow(row);
         }
         else
         {
@@ -662,12 +651,32 @@ public partial class MainWindow : Window
             _multiSeen[key] = row;
             _multiRows.Add(row);
             MultiGrid.ScrollIntoView(row);
+            FlashRow(row);
             // 신규 바코드에만 비프 1회 (중복은 무음)
             if (_scanner?.ActiveScanner is { } bdev)
                 Task.Run(() => _scanner.Beep(bdev.Id, 0));
         }
         MultiTotalText.Text = _multiTotal.ToString();
         BigCountText.Text = _multiSeen.Count.ToString();
+    }
+
+    /// <summary>판독된 행을 연한 앰버색으로 잠깐 하이라이트 후 부드럽게 사라지게 표시</summary>
+    private void FlashRow(MultiScanRow row)
+    {
+        MultiGrid.UpdateLayout();
+        if (MultiGrid.ItemContainerGenerator.ContainerFromItem(row) is not System.Windows.Controls.DataGridRow dgr)
+            return;
+        var color = System.Windows.Media.Color.FromArgb(70, 255, 193, 7); // 연한 앰버
+        var brush = new System.Windows.Media.SolidColorBrush(color);
+        dgr.Background = brush;
+        var anim = new System.Windows.Media.Animation.ColorAnimation
+        {
+            To = System.Windows.Media.Color.FromArgb(0, 255, 193, 7),
+            Duration = TimeSpan.FromMilliseconds(650),
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
+        };
+        anim.Completed += (_, _) => dgr.Background = System.Windows.Media.Brushes.Transparent;
+        brush.BeginAnimation(System.Windows.Media.SolidColorBrush.ColorProperty, anim);
     }
 
     private void MultiClear_Click(object sender, RoutedEventArgs e)
@@ -705,7 +714,8 @@ public partial class MainWindow : Window
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!IsLoaded || e.OriginalSource != MainTabs) return;
-        if (MainTabs.SelectedIndex != 1 && _multiActive)
-            MultiStop();
+        // 탭 전환마다 스캐너 상태를 재보장해 인식 불능 상태를 복구한다
+        if (MainTabs.SelectedIndex == 1) MultiArm();
+        else MultiDisarm();
     }
 }
