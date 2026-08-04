@@ -51,7 +51,8 @@ public partial class MainWindow : Window
     private DateTime _lastHostSwitch = DateTime.MinValue; // SNAPI 자동 전환 반복 방지
     private readonly DispatcherTimer _scannerWatchdog = new() { Interval = TimeSpan.FromSeconds(10) };
     private bool _watchdogBusy;
-    private int _scannerModeBusy; // EnsureScannerMode 실행 중 표시 (워치독과의 동시 SDK 호출 방지)
+    private int _scannerModeBusy;    // EnsureScannerMode 실행 중 표시 (워치독과의 동시 SDK 호출 방지)
+    private int _scannerModePending; // 실행 중에 들어온 재요청 - 유실 방지용 (루프 종료 후 즉시 재실행)
 
     public MainWindow()
     {
@@ -399,10 +400,15 @@ public partial class MainWindow : Window
     private void EnsureScannerMode(string reason)
     {
         if (_scanner is not { IsOpen: true }) return;
+        if (System.Threading.Interlocked.CompareExchange(ref _scannerModeBusy, 1, 0) != 0)
+        {
+            // 이미 다른 EnsureScannerMode 재시도 루프가 진행 중 - 이번 요청은 버리지 않고
+            // "보류" 표시만 해두면, 진행 중이던 루프가 끝나는 즉시 최신 UI 상태로 재실행된다.
+            System.Threading.Interlocked.Exchange(ref _scannerModePending, 1);
+            return;
+        }
         bool multiTab = Dispatcher.Invoke(() => MainTabs.SelectedIndex == 1);
         bool forceScan = !multiTab && Dispatcher.Invoke(() => ForceScanCheck.IsChecked == true);
-        if (System.Threading.Interlocked.CompareExchange(ref _scannerModeBusy, 1, 0) != 0)
-            return; // 이미 다른 EnsureScannerMode 재시도 루프가 진행 중 (탭 전환/PnP 이벤트 중첩 방지)
         Task.Run(() =>
         {
           try
@@ -453,7 +459,13 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() => SetStatus(
                 $"{reason}: 스캐너 모드 설정 실패 - USB를 재연결하면 자동으로 복구됩니다."));
           }
-          finally { System.Threading.Interlocked.Exchange(ref _scannerModeBusy, 0); }
+          finally
+          {
+              System.Threading.Interlocked.Exchange(ref _scannerModeBusy, 0);
+              // 진행 중에 유실 방지로 보류해둔 요청이 있으면 최신 UI 상태로 즉시 재실행
+              if (System.Threading.Interlocked.Exchange(ref _scannerModePending, 0) != 0)
+                  EnsureScannerMode(reason);
+          }
         });
     }
 
