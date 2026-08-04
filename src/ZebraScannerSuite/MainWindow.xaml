@@ -41,7 +41,7 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
 
-                        <GroupBox Grid.Row="0" Header="동작 모드 / 스캐너 연결">
+                        <GroupBox Grid.Row="0" Header="동작 모드">
                             <WrapPanel>
                                 <RadioButton x:Name="ModeBarcodeOnly" Content="① 바코드만 리딩" Margin="4,4,14,4"
                                              IsChecked="True" Checked="Mode_Changed" VerticalAlignment="Center"/>
@@ -55,12 +55,6 @@
                                 <CheckBox x:Name="WedgeCheck" Margin="0,4,14,4" VerticalAlignment="Center"
                                           Content="스캔값 키보드 입력 (커서 위치 + Enter)"
                                           ToolTip="스캔한 값을 현재 포커스된 창(엑셀 등)의 커서 위치에 입력하고 Enter를 보냅니다. Caps Lock 상태는 건드리지 않습니다."/>
-                                <Separator Width="12" Visibility="Hidden"/>
-                                <TextBlock Text="호스트 모드:" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                <ComboBox x:Name="HostModeCombo" Width="215" VerticalAlignment="Center"/>
-                                <CheckBox x:Name="HostModePermanent" Content="영구 적용" VerticalAlignment="Center" Margin="6,0"/>
-                                <Button Content="모드 전환" Click="SwitchHostMode_Click"/>
-                                <Button Content="스캐너 새로고침" Click="RefreshScanners_Click"/>
                             </WrapPanel>
                         </GroupBox>
 

@@ -43,12 +43,43 @@ public partial class MainWindow : Window
     private BarcodeData? _multiImageScan; // 멀티 탭 배경 사진 저장 대기 중인 판독 건
     private DateTime _multiImageAt;       // 위 촬영 요청 시각 (미수신 3초 후 자동 해제)
 
+    // 스캐너 자동 관리 (수동 새로고침/호스트 모드 버튼 대체)
+    private DateTime _lastHostSwitch = DateTime.MinValue; // SNAPI 자동 전환 반복 방지
+    private readonly DispatcherTimer _scannerWatchdog = new() { Interval = TimeSpan.FromSeconds(10) };
+    private bool _watchdogBusy;
+
     public MainWindow()
     {
         InitializeComponent();
         FieldsGrid.ItemsSource = _fields;
         MultiGrid.ItemsSource = _multiRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
+        _scannerWatchdog.Tick += ScannerWatchdog_Tick;
+    }
+
+    /// <summary>10초마다 연결 상태 점검: 연동 실패 시 재시도, 목록이 비면 재검색.
+    /// (수동 [스캐너 새로고침] 버튼 대체 - PnP 이벤트를 놓친 경우의 안전망)</summary>
+    private async void ScannerWatchdog_Tick(object? sender, EventArgs e)
+    {
+        if (_watchdogBusy) return;
+        _watchdogBusy = true;
+        try
+        {
+            if (_scanner == null)
+            {
+                await Task.Run(InitScanner);
+                UpdateScannerStatus();
+                if (_scanner != null) EnsureScannerMode("자동 재연결");
+            }
+            else if (_scanner.Scanners.Count == 0)
+            {
+                await Task.Run(_scanner.RefreshScanners);
+                UpdateScannerStatus();
+                if (_scanner.Scanners.Count > 0) EnsureScannerMode("자동 재연결");
+            }
+        }
+        catch { }
+        finally { _watchdogBusy = false; }
     }
 
     // ==================== 초기화 / 종료 ====================
@@ -66,6 +97,7 @@ public partial class MainWindow : Window
         // 시작 시 스캐너 동작 모드 보장 (재시도 포함):
         // 이전 세션에서 촬영 모드로 남아 있던 상태 복구 + 강제 스캔 설정 재무장
         EnsureScannerMode("초기화");
+        _scannerWatchdog.Start();
     }
 
     private void InitScanner()
@@ -123,12 +155,6 @@ public partial class MainWindow : Window
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode >= 1;
-
-        HostModeCombo.Items.Clear();
-        foreach (var (name, code) in CoreScannerService.HostModes)
-            HostModeCombo.Items.Add(new ComboBoxItem { Content = name, Tag = code });
-        int idx = Array.FindIndex(CoreScannerService.HostModes, m => m.Code == _settings.PreferredHostMode);
-        HostModeCombo.SelectedIndex = idx >= 0 ? idx : 0;
         UpdateRuleExample();
     }
 
@@ -140,8 +166,6 @@ public partial class MainWindow : Window
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
         _settings.MultiSaveImage = MultiSaveImageCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
-        if (HostModeCombo.SelectedItem is ComboBoxItem { Tag: string code })
-            _settings.PreferredHostMode = code;
     }
 
     private int CurrentMode => ModeBarcodeImage.IsChecked == true ? 1 : 0;
@@ -314,6 +338,13 @@ public partial class MainWindow : Window
             string path = ImageSaveService.Save(imageBytes, scan.Text, scan.Symbology, "", settingsSnapshot);
             await Dispatcher.BeginInvoke(() => SetStatus("이미지 저장 완료: " + path));
         });
+
+        // 배경에서 바코드 위치 탐색 → 찾으면 은은한 바운딩 박스 표시 (판독·저장 흐름과 무관, 지연 없음)
+        Task.Run(() =>
+        {
+            var pts = TryLocateBarcode(imageBytes);
+            if (pts != null) Dispatcher.BeginInvoke(() => ShowPreview(imageBytes, pts));
+        });
     }
 
     // ==================== 강제 스캔 모드 ====================
@@ -359,6 +390,18 @@ public partial class MainWindow : Window
                 }
                 try
                 {
+                    // SNAPI 모드가 아니면 자동 전환 (촬영·트리거 제어에 필요, 수동 버튼 대체)
+                    // 전환 후 스캐너가 재부팅되며 PnP 재연결 이벤트가 EnsureScannerMode를 다시 부른다.
+                    if (!dev.Type.Contains("SNAPI", StringComparison.OrdinalIgnoreCase) &&
+                        (DateTime.Now - _lastHostSwitch).TotalSeconds > 20)
+                    {
+                        _lastHostSwitch = DateTime.Now;
+                        Dispatcher.BeginInvoke(() => SetStatus(
+                            $"{reason}: 스캐너를 SNAPI(이미징) 모드로 자동 전환 중... 재부팅 후 자동 재연결됩니다."));
+                        _scanner.SwitchHostMode(dev.Id, _settings.PreferredHostMode, permanent: true);
+                        return;
+                    }
+
                     // Caps Lock 토글의 원인인 HID 키보드 에뮬레이터는 항상 끈다 (자체 웨지로 대체)
                     _scanner.SetKeyboardEmulator(false);
                     _scanner.ScanEnable(dev.Id);
@@ -377,7 +420,7 @@ public partial class MainWindow : Window
                 Thread.Sleep(700);
             }
             Dispatcher.BeginInvoke(() => SetStatus(
-                $"{reason}: 스캐너 모드 설정 실패 - USB 재연결 후 [스캐너 새로고침]을 눌러주세요."));
+                $"{reason}: 스캐너 모드 설정 실패 - USB를 재연결하면 자동으로 복구됩니다."));
         });
     }
 
@@ -399,7 +442,8 @@ public partial class MainWindow : Window
         Enqueue(async () =>
         {
             // ① 고속 소프트웨어 디코드 (~수십 ms)
-            BarcodeData? sw = TrySoftwareDecode(bytes, thorough: false);
+            float[]? swPoints = null;
+            BarcodeData? sw = TrySoftwareDecode(bytes, thorough: false, out swPoints);
 
             // ② 실패 시 하드웨어 디코더 재판독 (최대 0.6초) - 일반 스캔과 동일 성능
             if (sw == null && _scanner?.ActiveScanner is { } hwDev)
@@ -409,7 +453,7 @@ public partial class MainWindow : Window
             }
 
             // ③ 마지막으로 정밀 소프트웨어 디코드 (TryHarder+대비보정)
-            sw ??= TrySoftwareDecode(bytes, thorough: true);
+            if (sw == null) sw = TrySoftwareDecode(bytes, thorough: true, out swPoints);
 
             // ④ 이미지 저장 (바코드 인식 여부와 무관하게 항상 저장)
             string baseName = sw?.Text ?? "NOCODE";
@@ -417,6 +461,7 @@ public partial class MainWindow : Window
 
             await Dispatcher.BeginInvoke(() =>
             {
+                if (swPoints != null) ShowPreview(bytes, swPoints); // 인식 위치 하이라이트
                 if (sw != null)
                 {
                     SetBarcodeDisplay(sw.Text);
@@ -447,14 +492,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>촬영 이미지에서 ZXing으로 바코드 디코드 시도 (강제 스캔 모드용 폴백).
-    /// 다단계 전처리(대비 스트레칭/확대)로 인식률을 높인다.</summary>
-    private static BarcodeData? TrySoftwareDecode(byte[] bytes, bool thorough)
+    /// points: 인식 위치 (x,y 쌍) - 화면 하이라이트 표시용.</summary>
+    private static BarcodeData? TrySoftwareDecode(byte[] bytes, bool thorough, out float[]? points)
     {
+        points = null;
         try
         {
             using var bmp = LoadBitmap(bytes);
             var d = thorough ? SoftwareDecoder.DecodeThorough(bmp) : SoftwareDecoder.DecodeFast(bmp);
             if (d == null) return null;
+            points = d.Value.Points;
             return new BarcodeData { Text = d.Value.Text, Symbology = d.Value.Format + " (SW)", Time = DateTime.Now };
         }
         catch { return null; }
@@ -513,7 +560,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowPreview(byte[] bytes)
+    private void ShowPreview(byte[] bytes, float[]? marks = null)
     {
         _lastImageBytes = bytes;
         var bmp = new BitmapImage();
@@ -527,8 +574,58 @@ public partial class MainWindow : Window
         bmp.Freeze();
         _lastPixelW = bmp.PixelWidth;
         _lastPixelH = bmp.PixelHeight;
-        PreviewImage.Source = bmp;
+        BitmapSource src = bmp;
+        if (marks is { Length: >= 2 })
+        {
+            try { src = RenderHighlight(bmp, marks); } catch { src = bmp; }
+        }
+        PreviewImage.Source = src;
         NoImageText.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>인식된 바코드 위치에 은은한 주황색 바운딩 박스를 그린 표시용 이미지 생성.
+    /// (화면 표시 전용 - 저장 파일은 원본 그대로. 1회 렌더링이라 속도 영향 없음)</summary>
+    private static BitmapSource RenderHighlight(BitmapSource bmp, float[] marks)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = 0, maxY = 0;
+        for (int i = 0; i + 1 < marks.Length; i += 2)
+        {
+            minX = Math.Min(minX, marks[i]);     maxX = Math.Max(maxX, marks[i]);
+            minY = Math.Min(minY, marks[i + 1]); maxY = Math.Max(maxY, marks[i + 1]);
+        }
+        // 1D 바코드는 포인트가 스캔 라인 위라 납작해지므로 최소 여백 확보
+        double padX = Math.Max(14, (maxX - minX) * 0.08);
+        double padY = Math.Max(26, (maxY - minY) * 0.08);
+        double x0 = Math.Max(0, minX - padX), y0 = Math.Max(0, minY - padY);
+        double x1 = Math.Min(bmp.PixelWidth, maxX + padX), y1 = Math.Min(bmp.PixelHeight, maxY + padY);
+        if (x1 - x0 < 4 || y1 - y0 < 4) return bmp;
+
+        var dv = new System.Windows.Media.DrawingVisual();
+        using (var dc = dv.RenderOpen())
+        {
+            dc.DrawImage(bmp, new Rect(0, 0, bmp.PixelWidth, bmp.PixelHeight));
+            var stroke = new System.Windows.Media.Pen(
+                new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(150, 255, 152, 0)),
+                Math.Max(2.0, bmp.PixelWidth / 400.0));
+            var fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(24, 255, 152, 0));
+            dc.DrawRoundedRectangle(fill, stroke, new Rect(x0, y0, x1 - x0, y1 - y0), 8, 8);
+        }
+        var rtb = new RenderTargetBitmap(bmp.PixelWidth, bmp.PixelHeight, 96, 96,
+            System.Windows.Media.PixelFormats.Pbgra32);
+        rtb.Render(dv);
+        rtb.Freeze();
+        return rtb;
+    }
+
+    /// <summary>이미지에서 바코드 위치만 탐색 (배경 스레드용, 실패 시 null)</summary>
+    private static float[]? TryLocateBarcode(byte[] bytes)
+    {
+        try
+        {
+            using var bmp = LoadBitmap(bytes);
+            return SoftwareDecoder.DecodeFast(bmp)?.Points;
+        }
+        catch { return null; }
     }
 
     // ==================== Tab1 UI 핸들러 ====================
@@ -557,33 +654,6 @@ public partial class MainWindow : Window
         if (text.Length == 0) return;
         OnBarcode(new BarcodeData { Text = text, Symbology = "HID-KBD", Time = DateTime.Now });
         e.Handled = true;
-    }
-
-    private void RefreshScanners_Click(object sender, RoutedEventArgs e)
-    {
-        if (_scanner == null) { Task.Run(InitScanner); SetStatus("스캐너 재검색..."); return; }
-        _scanner.RefreshScanners();
-        UpdateScannerStatus();
-        SetStatus($"스캐너 {_scanner.Scanners.Count}대 검색됨");
-    }
-
-    private void SwitchHostMode_Click(object sender, RoutedEventArgs e)
-    {
-        if (_scanner?.ActiveScanner is not { } dev)
-        {
-            SetStatus("연결된 스캐너가 없습니다.");
-            return;
-        }
-        if (HostModeCombo.SelectedItem is not ComboBoxItem { Tag: string code }) return;
-        bool permanent = HostModePermanent.IsChecked == true;
-        SetStatus("호스트 모드 전환 중... 스캐너가 재부팅됩니다 (수 초 소요)");
-        Task.Run(() =>
-        {
-            bool ok = _scanner.SwitchHostMode(dev.Id, code, permanent);
-            Dispatcher.BeginInvoke(() => SetStatus(ok
-                ? "호스트 모드 전환 명령 전송 완료 - 재연결 대기 중"
-                : "호스트 모드 전환 실패"));
-        });
     }
 
     private void BrowseDir_Click(object sender, RoutedEventArgs e)

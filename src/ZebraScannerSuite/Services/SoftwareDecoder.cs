@@ -12,8 +12,8 @@ namespace ZebraScannerSuite.Services;
 public static class SoftwareDecoder
 {
     /// <summary>고속 1차 시도: TryHarder 없이 원본만 분석 (~수십 ms).
-    /// 선명한 바코드는 대부분 여기서 잡힌다.</summary>
-    public static (string Text, string Format)? DecodeFast(Bitmap src)
+    /// 선명한 바코드는 대부분 여기서 잡힌다. Points: 인식 위치 (x,y 쌍) - 하이라이트 표시용.</summary>
+    public static (string Text, string Format, float[]? Points)? DecodeFast(Bitmap src)
     {
         var reader = new ZXing.Windows.Compatibility.BarcodeReader
         {
@@ -22,12 +22,12 @@ public static class SoftwareDecoder
         };
         var res = reader.Decode(src);
         if (res == null || string.IsNullOrEmpty(res.Text)) return null;
-        return (res.Text, res.BarcodeFormat.ToString());
+        return (res.Text, res.BarcodeFormat.ToString(), ToPoints(res.ResultPoints));
     }
 
     /// <summary>정밀 시도: TryHarder + 대비 스트레칭. 확대 재시도는 시간이 오래 걸려 제외
     /// (하드웨어 디코더 재판독이 그 역할을 대신한다).</summary>
-    public static (string Text, string Format)? DecodeThorough(Bitmap src)
+    public static (string Text, string Format, float[]? Points)? DecodeThorough(Bitmap src)
     {
         var reader = new ZXing.Windows.Compatibility.BarcodeReader
         {
@@ -41,7 +41,16 @@ public static class SoftwareDecoder
             res = reader.Decode(st);
         }
         if (res == null || string.IsNullOrEmpty(res.Text)) return null;
-        return (res.Text, res.BarcodeFormat.ToString());
+        return (res.Text, res.BarcodeFormat.ToString(), ToPoints(res.ResultPoints));
+    }
+
+    private static float[]? ToPoints(ZXing.ResultPoint[]? pts)
+    {
+        if (pts == null || pts.Length == 0) return null;
+        var list = new List<float>(pts.Length * 2);
+        foreach (var p in pts)
+            if (p != null) { list.Add(p.X); list.Add(p.Y); }
+        return list.Count >= 2 ? list.ToArray() : null;
     }
 
     /// <summary>휘도 2%/98% 퍼센타일 대비 스트레칭 (저대비·흐린 인쇄 대응)</summary>
