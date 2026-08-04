@@ -9,11 +9,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <RootNamespace>ZebraScannerSuite</RootNamespace>
-    <AssemblyName>ZebraScannerSuite</AssemblyName>
+    <AssemblyName>UDI Capture_ver.1</AssemblyName>
     <ApplicationIcon />
     <Version>1.0.0</Version>
-    <Product>Zebra DS9908 Scanner Suite</Product>
-    <Description>Zebra DS9908 바코드 스캔 / 이미지 캡처 / OCR / ISO 15415 검증 시뮬레이션</Description>
+    <Product>UDI Capture_ver.1</Product>
+    <AssemblyTitle>UDI Capture_ver.1</AssemblyTitle>
+    <Description>UDI Capture - Zebra DS9908 바코드 스캔 / 이미지 캡처</Description>
     <!-- CoreScanner COM은 x86/x64 모두 제공되나, 문제가 있으면 x86으로 고정하세요 -->
     <PlatformTarget>AnyCPU</PlatformTarget>
   </PropertyGroup>

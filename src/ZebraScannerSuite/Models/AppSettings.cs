@@ -39,6 +39,9 @@ public class AppSettings
     /// <summary>강제 스캔 모드 활성 상태 (F9, 트리거=촬영)</summary>
     public bool ForceScanEnabled { get; set; }
 
+    /// <summary>멀티 스캔 탭: 판독 시마다 배경에서 사진 자동 저장 (화면 표시 없음)</summary>
+    public bool MultiSaveImage { get; set; }
+
     public ObservableCollection<ExtractionRule> ExtractionRules { get; set; } = DefaultExtractionRules();
 
     /// <summary>기본 추출 필드: GTIN(01) / LOT(10) / PN(240) / MFG DATE(11) / EXP DATE(17) / SN(21) / UPN(30)</summary>

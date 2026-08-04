@@ -40,6 +40,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
     private int _multiTotal;
     private bool _multiActive; // 멀티 스캔 수신 중
+    private BarcodeData? _multiImageScan; // 멀티 탭 배경 사진 저장 대기 중인 판독 건
+    private DateTime _multiImageAt;       // 위 촬영 요청 시각 (미수신 3초 후 자동 해제)
 
     public MainWindow()
     {
@@ -117,6 +119,7 @@ public partial class MainWindow : Window
         FileRuleText.Text = _settings.FileNameRule;
         WedgeCheck.IsChecked = _settings.WedgeOutput;
         ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
+        MultiSaveImageCheck.IsChecked = _settings.MultiSaveImage;
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode >= 1;
@@ -135,6 +138,7 @@ public partial class MainWindow : Window
         _settings.FileNameRule = FileRuleText.Text.Trim();
         _settings.WedgeOutput = WedgeCheck.IsChecked == true;
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
+        _settings.MultiSaveImage = MultiSaveImageCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
         if (HostModeCombo.SelectedItem is ComboBoxItem { Tag: string code })
             _settings.PreferredHostMode = code;
@@ -193,7 +197,12 @@ public partial class MainWindow : Window
 
         if (MainTabs.SelectedIndex == 1) // Multi / Continuous 탭
         {
-            if (_multiActive) AddMultiScan(b);
+            if (_multiActive)
+            {
+                AddMultiScan(b);
+                // 사진 저장 옵션: 판독 직후 같은 위치를 배경에서 촬영·저장 (화면 표시 없음)
+                if (MultiSaveImageCheck.IsChecked == true) MultiCaptureImage(b);
+            }
             return;
         }
         HandleScanTab(b);
@@ -263,6 +272,20 @@ public partial class MainWindow : Window
     {
         if (_scanner?.ActiveScanner is { } d) _scanner.ReleaseTrigger(d.Id);
         _imageTimeout.Stop();
+
+        // 멀티 탭: 배경 사진 저장만 수행하고 화면에는 표시하지 않음
+        if (MainTabs.SelectedIndex == 1 && _multiImageScan != null)
+        {
+            var mScan = _multiImageScan;
+            _multiImageScan = null;
+            var settingsSnapshot = _settings;
+            Enqueue(async () =>
+            {
+                string path = ImageSaveService.Save(imageBytes, mScan.Text, mScan.Symbology, "", settingsSnapshot);
+                await Dispatcher.BeginInvoke(() => SetStatus("사진 저장 완료: " + path));
+            });
+            return;
+        }
 
         ShowPreview(imageBytes);
 
@@ -620,6 +643,23 @@ public partial class MainWindow : Window
         EnsureScannerMode("일반 스캔 복귀");
     }
 
+    /// <summary>멀티 탭 사진 저장 옵션: 판독 직후 이미지 모드로 촬영 트리거 (배경 처리, 1건씩)</summary>
+    private void MultiCaptureImage(BarcodeData b)
+    {
+        if (_scanner?.ActiveScanner is not { } dev) return;
+        // 이전 촬영이 3초 안에 완료되지 않았으면 미수신으로 보고 새로 진행
+        bool inFlight = _multiImageScan != null && (DateTime.Now - _multiImageAt).TotalSeconds < 3;
+        if (inFlight) return;
+        _multiImageScan = b;
+        _multiImageAt = DateTime.Now;
+        Task.Run(() =>
+        {
+            Thread.Sleep(80); // 디코드 세션 종료 대기
+            bool ok = _scanner!.CaptureImage(dev.Id);
+            if (!ok) Dispatcher.BeginInvoke(() => _multiImageScan = null);
+        });
+    }
+
     private void AddMultiScan(BarcodeData b)
     {
         _multiTotal++;
@@ -701,13 +741,17 @@ public partial class MainWindow : Window
         var sb = new StringBuilder();
         sb.AppendLine("No,Time,GTIN,LOT,MFG,EXP,PN,SN,UPN,Raw,Count");
         foreach (var r in _multiRows)
-            sb.AppendLine($"{r.No},{r.TimeText},{Csv(r.Gtin)},{Csv(r.Lot)},{Csv(r.Mfg)},{Csv(r.Exp)},{Csv(r.Pn)},{Csv(r.Sn)},{Csv(r.Upn)},{Csv(r.Raw)},{r.Count}");
+            sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Gtin)},{CsvText(r.Lot)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Pn)},{CsvText(r.Sn)},{CsvText(r.Upn)},{CsvText(r.Raw)},{r.Count}");
         File.WriteAllText(dlg.FileName, sb.ToString(), new UTF8Encoding(true));
         SetStatus("CSV 저장 완료: " + dlg.FileName);
     }
 
     private static string Csv(string s) =>
         s.Contains(',') || s.Contains('"') || s.Contains('\n') ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+
+    /// <summary>엑셀에서 숫자(지수 표기)로 변환되지 않도록 ="값" 수식 형태로 감싼다 (GTIN 등)</summary>
+    private static string CsvText(string s) =>
+        string.IsNullOrEmpty(s) ? "" : "\"=\"\"" + s.Replace("\"", "\"\"") + "\"\"\"";
 
     // ==================== 탭 전환 ====================
 

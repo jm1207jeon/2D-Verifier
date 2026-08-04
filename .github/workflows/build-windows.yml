@@ -32,11 +32,11 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZebraScannerSuite-win-x64
+          name: UDI-Capture-win-x64
           path: publish/
 
       - name: Zip for release
-        run: Compress-Archive -Path publish/* -DestinationPath ZebraScannerSuite-win-x64.zip
+        run: Compress-Archive -Path publish/* -DestinationPath UDI-Capture-win-x64.zip
 
       # 항상 최신 빌드를 'latest-build' 릴리스에 게시 (Releases 페이지에서 바로 다운로드)
       - name: Publish rolling release
@@ -46,7 +46,7 @@ jobs:
           name: "Latest Build (자동 빌드)"
           body: |
             GitHub Actions가 자동 빌드한 최신 실행 파일입니다.
-            - `ZebraScannerSuite-win-x64.zip` 압축 해제 후 `ZebraScannerSuite.exe` 실행
+            - `UDI-Capture-win-x64.zip` 압축 해제 후 `UDI Capture_ver.1.exe` 실행
             - 실행 PC에는 Zebra Scanner SDK for Windows(CoreScanner 드라이버)만 설치하면 됩니다 (.NET 설치 불필요)
-          files: ZebraScannerSuite-win-x64.zip
+          files: UDI-Capture-win-x64.zip
           prerelease: true

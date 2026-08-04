@@ -264,8 +264,15 @@ public sealed class CoreScannerService : IDisposable
 
     private static string BytesToText(byte[] raw)
     {
-        try { return new UTF8Encoding(false, true).GetString(raw); }
-        catch { return Encoding.Latin1.GetString(raw); }
+        string text;
+        try { text = new UTF8Encoding(false, true).GetString(raw); }
+        catch { text = Encoding.Latin1.GetString(raw); }
+        // CR/LF 등 제어문자 제거 (값이 여러 줄로 표시되는 문제 방지).
+        // GS(0x1D)는 GS1 구분자이므로 유지.
+        var sb = new StringBuilder(text.Length);
+        foreach (char c in text)
+            if (c == '\u001D' || !char.IsControl(c)) sb.Append(c);
+        return sb.ToString();
     }
 
     public void Dispose()

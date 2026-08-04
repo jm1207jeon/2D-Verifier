@@ -38,6 +38,13 @@ public static class Gs1Parser
     public static string StripAim(string data) =>
         data.Length >= 3 && data[0] == ']' ? data[3..] : data;
 
+    /// <summary>스텐트 반제품 바코드: "01P"로 시작하면 AI 파싱을 하지 않고 전체를 LOT로 취급</summary>
+    public static bool IsStentSemiProduct(string data)
+    {
+        string s = StripAim(data ?? "");
+        return s.StartsWith("01P", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>데이터를 AI/값 토큰 열로 분해. 인식 불가 잔여분은 값 토큰으로 남긴다.</summary>
     public static List<Gs1Token> Tokenize(string data)
     {
@@ -49,6 +56,12 @@ public static class Gs1Parser
         {
             tokens.Add(new Gs1Token(s[..3], false)); // AIM 식별자는 일반 표시
             s = s[3..];
+        }
+        // 스텐트 반제품(01P~): AI 분해 없이 전체를 값으로 표시
+        if (s.StartsWith("01P", StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.Add(new Gs1Token(s, false));
+            return tokens;
         }
         // 괄호 표기 "(01)1234..." 도 지원
         if (s.StartsWith('(')) s = s.Replace("(", "").Replace(")", "");
@@ -84,6 +97,7 @@ public static class Gs1Parser
 
             pos += ai.Length;
             string value;
+            bool gsTerminated = false; // GS 구분자로 값이 명확히 끝났는지 (끝났으면 특례 분리 불필요)
             if (fixedLen >= 0)
             {
                 int take = Math.Min(fixedLen, s.Length - pos);
@@ -93,15 +107,29 @@ public static class Gs1Parser
             else
             {
                 int gs = s.IndexOf(GS, pos);
+                gsTerminated = gs >= 0;
                 value = gs < 0 ? s[pos..] : s[pos..gs];
                 pos = gs < 0 ? s.Length : gs;
             }
 
-            // ---- 라벨 특례: GS 구분자 없이 뒤에 SN(21)/UPN(30)이 이어 붙는 패턴 분리 ----
-            // SN은 1~2자리 숫자, UPN은 'M'으로 시작한다는 고정 규칙 기반.
+            // ---- 라벨 특례: GS 구분자 없이 필드가 이어 붙는 라벨(고정폭) 지원 ----
+            // 검증 문서 기준: LOT(10)=8자리 고정, SN(21)=1~2자리 숫자, UPN(30)='M'으로 시작.
+            // GS로 값이 끝난 경우는 표준 GS1이므로 특례를 적용하지 않는다.
+
+            // 특례 LOT: GS 없이 LOT 뒤에 다른 AI들이 이어 붙은 경우 → 정확히 8자만 LOT,
+            //  나머지는 되돌려서 다음 AI(17/11/240/21…)로 계속 파싱
+            //  예) "10 25081215 17 280928 240 11c0803 21 7"
+            if (ai == "10" && !gsTerminated && value.Length > 8)
+            {
+                pos -= value.Length - 8;
+                value = value[..8];
+                tokens.Add(new Gs1Token(ai, true));
+                tokens.Add(new Gs1Token(value, false));
+                continue;
+            }
 
             // 특례 A: AI 21 값이 "SN + 30 + M…" 형태 → SN과 UPN 분리
-            if (ai == "21")
+            if (ai == "21" && !gsTerminated)
             {
                 var m = Regex.Match(value, @"^(\d{1,2})30(M.*)$");
                 if (m.Success)
@@ -114,10 +142,10 @@ public static class Gs1Parser
                 }
             }
 
-            // 특례 B: PN(240)/LOT(10) 값 끝에 "21 + SN(1~2자리) [+ 30 + M…]" 이 붙은 형태
+            // 특례 B: PN(240) 값 끝에 "21 + SN(1~2자리) [+ 30 + M…]" 이 붙은 형태
             //  예) "24001-0854211" → PN=01-0854, SN=1
             //  greedy(.+)로 가장 오른쪽의 21을 찾으므로 값 중간의 '21'과 혼동하지 않음
-            if (ai is "240" or "10")
+            if (ai == "240" && !gsTerminated)
             {
                 var m = Regex.Match(value, @"^(.+)21(\d{1,2})30(M.*)$");
                 if (m.Success)
@@ -150,6 +178,12 @@ public static class Gs1Parser
     public static Dictionary<string, string> Parse(string data)
     {
         var result = new Dictionary<string, string>();
+        // 스텐트 반제품(01P~): AI 파싱 없이 전체 값을 LOT(10)로
+        if (IsStentSemiProduct(data))
+        {
+            result["10"] = StripAim(data);
+            return result;
+        }
         string? currentAi = null;
         foreach (var t in Tokenize(data))
         {
