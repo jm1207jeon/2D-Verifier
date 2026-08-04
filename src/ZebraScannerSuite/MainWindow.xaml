@@ -43,18 +43,19 @@
 
                         <GroupBox Grid.Row="0" Header="동작 모드">
                             <WrapPanel>
-                                <RadioButton x:Name="ModeBarcodeOnly" Content="① 바코드만 리딩" Margin="4,4,14,4"
+                                <RadioButton x:Name="ModeBarcodeOnly" Content="바코드 리딩" Margin="4,4,14,4"
                                              IsChecked="True" Checked="Mode_Changed" VerticalAlignment="Center"/>
-                                <RadioButton x:Name="ModeBarcodeImage" Content="② 바코드 + 이미지 캡처" Margin="4,4,14,4"
+                                <RadioButton x:Name="ModeBarcodeImage" Content="바코드 리딩 + 이미지 캡처" Margin="4,4,14,4"
                                              Checked="Mode_Changed" VerticalAlignment="Center"/>
-                                <CheckBox x:Name="ForceScanCheck" Margin="4,4,6,4" VerticalAlignment="Center"
+                                <CheckBox x:Name="ForceScanCheck" Margin="4,4,14,4" VerticalAlignment="Center"
                                           Foreground="#FFB03A2E" FontWeight="Bold"
                                           Content="강제 스캔 (F9): 트리거=촬영"
                                           Checked="ForceScan_Toggled" Unchecked="ForceScan_Toggled"
                                           ToolTip="켜면 트리거를 당길 때마다 사진을 촬영해 소프트웨어로 바코드를 인식하고 이미지를 저장합니다."/>
-                                <CheckBox x:Name="WedgeCheck" Margin="0,4,14,4" VerticalAlignment="Center"
-                                          Content="스캔값 키보드 입력 (커서 위치 + Enter)"
-                                          ToolTip="스캔한 값을 현재 포커스된 창(엑셀 등)의 커서 위치에 입력하고 Enter를 보냅니다. Caps Lock 상태는 건드리지 않습니다."/>
+                                <CheckBox x:Name="DupIgnoreCheck" Margin="0,4,14,4" VerticalAlignment="Center"
+                                          Content="중복값 무시" IsChecked="True"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="이미 스캔한 값은 화면에 표시(하이라이트)만 하고 키보드 입력은 하지 않습니다."/>
                             </WrapPanel>
                         </GroupBox>
 
@@ -92,46 +93,77 @@
                         </GroupBox>
                     </Grid>
 
-                    <!-- 우측 설정 -->
-                    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-                        <StackPanel>
-                            <GroupBox Header="이미지 저장 설정">
-                                <StackPanel>
-                                    <TextBlock Text="저장 경로 (재실행 시에도 유지됩니다)"/>
-                                    <DockPanel>
-                                        <Button DockPanel.Dock="Right" Content="찾아보기" Click="BrowseDir_Click"/>
-                                        <TextBox x:Name="SaveDirText" VerticalAlignment="Center"/>
-                                    </DockPanel>
-                                    <TextBlock Text="파일명 규칙" Margin="0,8,0,0"/>
-                                    <TextBox x:Name="FileRuleText" TextChanged="FileRuleText_TextChanged"/>
-                                    <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap"
-                                               Text="토큰: {DATE:yyyyMMdd} {TIME:HHmmss} {BARCODE} {SYMBOLOGY} {SEQ:3}  /  ### = {SEQ:3}"/>
-                                    <TextBlock x:Name="FileRuleExample" FontSize="11" Foreground="#FF1A5276" TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </GroupBox>
+                    <!-- 우측 설정 + 실시간 목록 -->
+                    <Grid Grid.Column="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
 
-                            <GroupBox Header="추출 필드">
-                                <DataGrid x:Name="FieldsGrid" AutoGenerateColumns="False" IsReadOnly="True"
-                                          HeadersVisibility="Column" CanUserAddRows="False"
-                                          Height="202" RowHeight="24" FontSize="13"
-                                          GridLinesVisibility="All"
-                                          HorizontalGridLinesBrush="#FFDDDDDD" VerticalGridLinesBrush="#FFDDDDDD"
-                                          BorderBrush="#FFDDDDDD" RowHeaderWidth="0">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="항목" Binding="{Binding Name}" Width="90"/>
-                                        <DataGridTextColumn Header="값" Binding="{Binding Value}" Width="*"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </GroupBox>
+                        <GroupBox Grid.Row="0" Header="이미지 저장 설정">
+                            <StackPanel>
+                                <TextBlock Text="저장 경로 (재실행 시에도 유지됩니다)"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Content="찾아보기" Click="BrowseDir_Click"/>
+                                    <TextBox x:Name="SaveDirText" VerticalAlignment="Center" TextChanged="Setting_TextChanged"/>
+                                </DockPanel>
+                                <CheckBox x:Name="SaveDateFolderCheck" Content="날짜 폴더로 저장 (YYYY-MM-DD)" Margin="0,8,0,0"
+                                          IsChecked="True" Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="지정 경로 안에 오늘 날짜 폴더를 자동 생성해 그 안에 저장합니다"/>
+                                <CheckBox x:Name="SaveLotFolderCheck" Content="LOT 폴더로 저장" Margin="0,4,0,0"
+                                          Checked="Setting_Changed" Unchecked="Setting_Changed"
+                                          ToolTip="UDI에서 추출한 LOT명 폴더를 자동 생성해 그 안에 저장합니다 (날짜 폴더와 함께 켜면 날짜/LOT 순서로 중첩)"/>
+                            </StackPanel>
+                        </GroupBox>
 
-                            <Button Content="설정 저장" FontWeight="Bold" Click="SaveSettings_Click" Margin="6"/>
-                        </StackPanel>
-                    </ScrollViewer>
+                        <GroupBox Grid.Row="1" Header="UDI 데이터">
+                            <DataGrid x:Name="FieldsGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                                      HeadersVisibility="Column" CanUserAddRows="False"
+                                      Height="202" RowHeight="24" FontSize="13"
+                                      GridLinesVisibility="All"
+                                      HorizontalGridLinesBrush="#FFDDDDDD" VerticalGridLinesBrush="#FFDDDDDD"
+                                      BorderBrush="#FFDDDDDD" RowHeaderWidth="0">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="항목" Binding="{Binding Name}" Width="90"/>
+                                    <DataGridTextColumn Header="값" Binding="{Binding Value}" Width="*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </GroupBox>
+
+                        <GroupBox Grid.Row="2" Header="실시간 목록 (같은 LOT끼리 묶음 표시)">
+                            <DataGrid x:Name="ScanListGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                                      HeadersVisibility="Column" CanUserAddRows="False"
+                                      RowHeight="24" FontSize="13"
+                                      GridLinesVisibility="All"
+                                      HorizontalGridLinesBrush="#FFDDDDDD" VerticalGridLinesBrush="#FFDDDDDD"
+                                      BorderBrush="#FFDDDDDD" RowHeaderWidth="0">
+                                <DataGrid.RowStyle>
+                                    <Style TargetType="DataGridRow">
+                                        <Setter Property="Background" Value="{Binding GroupBrush}"/>
+                                    </Style>
+                                </DataGrid.RowStyle>
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" Width="95"/>
+                                    <DataGridTextColumn Header="EXP" Binding="{Binding Exp}" Width="85"/>
+                                    <DataGridTextColumn Header="PN" Binding="{Binding Pn}" Width="*"/>
+                                    <DataGridTextColumn Header="SN" Binding="{Binding Sn}" Width="45">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="TextAlignment" Value="Right"/>
+                                                <Setter Property="Padding" Value="0,0,6,0"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </GroupBox>
+                    </Grid>
                 </Grid>
             </TabItem>
 
             <!-- ===================== TAB 2 : Multi / Continuous ===================== -->
-            <TabItem Header="  Multi / Continuous  ">
+            <TabItem Header="  멀티 스캔  ">
                 <Grid Margin="4">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -144,6 +176,7 @@
                         <Button Content="CSV 내보내기" Click="MultiExport_Click"/>
                         <CheckBox x:Name="MultiSaveImageCheck" Content="사진 저장 (판독 시마다 자동 저장)"
                                   VerticalAlignment="Center" Margin="16,0,0,0"
+                                  Checked="Setting_Changed" Unchecked="Setting_Changed"
                                   ToolTip="체크하면 판독할 때마다 같은 위치를 촬영해 이미지 저장 경로에 자동 저장합니다 (화면 표시 없음)"/>
                     </WrapPanel>
 

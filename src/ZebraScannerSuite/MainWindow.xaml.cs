@@ -26,6 +26,10 @@ public partial class MainWindow : Window
 
     // Tab1 상태
     private readonly ObservableCollection<FieldValue> _fields = new();
+    private readonly ObservableCollection<ScanListRow> _scanRows = new(); // 실시간 목록
+    private readonly Dictionary<string, ScanListRow> _scanSeen = new();   // 중복 판정 (스캔값 기준)
+    private string? _scanLastLot;   // 직전 행의 LOT (묶음 판정)
+    private bool _scanGroupAlt;     // LOT 묶음 배경 교대 플래그
     private byte[]? _lastImageBytes;
     private int _lastPixelW, _lastPixelH;
     private BarcodeData? _pendingScan;          // 이미지 대기 중인 바코드
@@ -52,6 +56,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         FieldsGrid.ItemsSource = _fields;
+        ScanListGrid.ItemsSource = _scanRows;
         MultiGrid.ItemsSource = _multiRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
         _scannerWatchdog.Tick += ScannerWatchdog_Tick;
@@ -148,24 +153,36 @@ public partial class MainWindow : Window
     private void ApplySettingsToUi()
     {
         SaveDirText.Text = _settings.ImageSaveDirectory;
-        FileRuleText.Text = _settings.FileNameRule;
-        WedgeCheck.IsChecked = _settings.WedgeOutput;
         ForceScanCheck.IsChecked = _settings.ForceScanEnabled;
         MultiSaveImageCheck.IsChecked = _settings.MultiSaveImage;
+        SaveDateFolderCheck.IsChecked = _settings.SaveDateFolder;
+        SaveLotFolderCheck.IsChecked = _settings.SaveLotFolder;
+        DupIgnoreCheck.IsChecked = _settings.IgnoreDuplicates;
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode >= 1;
-        UpdateRuleExample();
     }
 
     private void CollectSettingsFromUi()
     {
         _settings.ImageSaveDirectory = SaveDirText.Text.Trim();
-        _settings.FileNameRule = FileRuleText.Text.Trim();
-        _settings.WedgeOutput = WedgeCheck.IsChecked == true;
+        _settings.WedgeOutput = true; // 키보드 입력은 항상 사용 (UI 옵션 제거됨)
         _settings.ForceScanEnabled = ForceScanCheck.IsChecked == true;
         _settings.MultiSaveImage = MultiSaveImageCheck.IsChecked == true;
+        _settings.SaveDateFolder = SaveDateFolderCheck.IsChecked == true;
+        _settings.SaveLotFolder = SaveLotFolderCheck.IsChecked == true;
+        _settings.IgnoreDuplicates = DupIgnoreCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
+    }
+
+    /// <summary>설정 컨트롤 변경 시 자동 저장 (설정 저장 버튼 대체)</summary>
+    private void Setting_Changed(object sender, RoutedEventArgs e) => AutoSaveSettings();
+    private void Setting_TextChanged(object sender, TextChangedEventArgs e) => AutoSaveSettings();
+
+    private void AutoSaveSettings()
+    {
+        if (!IsLoaded) return;
+        try { CollectSettingsFromUi(); SettingsService.Save(_settings); } catch { }
     }
 
     private int CurrentMode => ModeBarcodeImage.IsChecked == true ? 1 : 0;
@@ -240,9 +257,12 @@ public partial class MainWindow : Window
         foreach (var f in DataExtractionService.Apply(b.Text, _settings.ExtractionRules))
             _fields.Add(f);
 
-        // 자체 키보드 웨지: 다른 창(엑셀 등)이 포커스일 때 커서 위치로 값 + Enter 전송
-        // (Zebra 에뮬레이터 대체 - Caps Lock 무영향)
-        if (WedgeCheck.IsChecked == true && !IsActive)
+        // 실시간 목록 갱신 (신규=행 추가, 중복=기존 행 하이라이트만)
+        bool duplicate = RecordScan(b);
+
+        // 자체 키보드 웨지(항상 사용): 다른 창(엑셀 등)이 포커스일 때 커서 위치로 값 + Enter 전송.
+        // '중복값 무시'가 켜져 있으면 중복 스캔은 입력을 생략한다.
+        if (!IsActive && !(duplicate && DupIgnoreCheck.IsChecked == true))
         {
             string wedgeText = b.Text;
             Task.Run(() => KeyboardWedge.TypeText(wedgeText));
@@ -355,6 +375,7 @@ public partial class MainWindow : Window
     private void ForceScan_Toggled(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
+        AutoSaveSettings();
         if (_scanner is not { IsOpen: true })
         {
             if (ForceScanCheck.IsChecked == true)
@@ -476,8 +497,9 @@ public partial class MainWindow : Window
                     SymbologyText.Text = "인식 실패";
                     _fields.Clear();
                 }
-                // 자체 키보드 웨지
-                if (sw != null && WedgeCheck.IsChecked == true && !IsActive)
+                // 실시간 목록 + 자체 키보드 웨지 (중복값 무시 옵션 반영)
+                bool fsDuplicate = sw != null && RecordScan(sw);
+                if (sw != null && !IsActive && !(fsDuplicate && DupIgnoreCheck.IsChecked == true))
                 {
                     string wedgeText = sw.Text;
                     Task.Run(() => KeyboardWedge.TypeText(wedgeText));
@@ -542,6 +564,35 @@ public partial class MainWindow : Window
             Thread.Sleep(60);
             _scanner.SetCaptureImageMode(dev.Id);
         });
+    }
+
+    /// <summary>일반 스캔 실시간 목록 갱신. 중복이면 기존 행 하이라이트만 하고 true 반환.
+    /// 신규 행은 연속된 같은 LOT끼리 배경색으로 묶어 표시한다 (LOT가 바뀌면 새 묶음).</summary>
+    private bool RecordScan(BarcodeData b)
+    {
+        if (_scanSeen.TryGetValue(b.Text, out var row))
+        {
+            ScanListGrid.ScrollIntoView(row);
+            FlashRow(ScanListGrid, row);
+            return true;
+        }
+        var ai = Gs1Parser.Parse(b.Text);
+        string lot = ai.GetValueOrDefault("10", "");
+        if (_scanRows.Count == 0 || lot != _scanLastLot) _scanGroupAlt = !_scanGroupAlt;
+        _scanLastLot = lot;
+        var nr = new ScanListRow
+        {
+            Lot = lot,
+            Exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", "")),
+            Pn = ai.GetValueOrDefault("240", ""),
+            Sn = ai.GetValueOrDefault("21", ""),
+            GroupBrush = _scanGroupAlt ? "#FFE8F1FA" : "#00FFFFFF", // 묶음별 교대 배경
+        };
+        _scanSeen[b.Text] = nr;
+        _scanRows.Add(nr);
+        ScanListGrid.ScrollIntoView(nr);
+        FlashRow(ScanListGrid, nr);
+        return false;
     }
 
     /// <summary>바코드 리딩값 표시: GS1 응용식별자(01,10,17,11,240,21,30 등)만 빨간색으로 강조</summary>
@@ -633,7 +684,8 @@ public partial class MainWindow : Window
     private void Mode_Changed(object sender, RoutedEventArgs e)
     {
         if (!IsLoaded) return;
-        SetStatus(CurrentMode == 0 ? "모드: 바코드만 리딩" : "모드: 바코드 + 이미지 캡처");
+        SetStatus(CurrentMode == 0 ? "모드: 바코드 리딩" : "모드: 바코드 리딩 + 이미지 캡처");
+        AutoSaveSettings();
     }
 
     private void ClearScan_Click(object sender, RoutedEventArgs e)
@@ -644,6 +696,11 @@ public partial class MainWindow : Window
         PreviewImage.Source = null;
         _lastImageBytes = null;
         NoImageText.Visibility = Visibility.Visible;
+        // 실시간 목록·중복 기록도 초기화
+        _scanRows.Clear();
+        _scanSeen.Clear();
+        _scanLastLot = null;
+        _scanGroupAlt = false;
     }
 
     private void HidInputBox_KeyDown(object sender, KeyEventArgs e)
@@ -662,30 +719,8 @@ public partial class MainWindow : Window
         if (Directory.Exists(SaveDirText.Text)) dlg.InitialDirectory = SaveDirText.Text;
         if (dlg.ShowDialog(this) == true)
         {
-            SaveDirText.Text = dlg.FolderName;
-            UpdateRuleExample();
+            SaveDirText.Text = dlg.FolderName; // TextChanged가 자동 저장
         }
-    }
-
-    private void FileRuleText_TextChanged(object sender, TextChangedEventArgs e) => UpdateRuleExample();
-
-    private void UpdateRuleExample()
-    {
-        try
-        {
-            string path = ImageSaveService.BuildPath(
-                SaveDirText.Text.Length > 0 ? SaveDirText.Text : ".",
-                FileRuleText.Text, "0123456789012", "EAN-13", "", ".jpg");
-            FileRuleExample.Text = "예시: " + Path.GetFileName(path);
-        }
-        catch (Exception ex) { FileRuleExample.Text = "규칙 오류: " + ex.Message; }
-    }
-
-    private void SaveSettings_Click(object sender, RoutedEventArgs e)
-    {
-        CollectSettingsFromUi();
-        SettingsService.Save(_settings);
-        SetStatus("설정이 저장되었습니다. (재실행 시에도 유지)");
     }
 
     private static DrawingBitmap LoadBitmap(byte[] bytes)
@@ -740,7 +775,7 @@ public partial class MainWindow : Window
             row.Count++;
             MultiGrid.Items.Refresh();
             MultiGrid.ScrollIntoView(row);
-            FlashRow(row);
+            FlashRow(MultiGrid, row);
         }
         else
         {
@@ -761,7 +796,7 @@ public partial class MainWindow : Window
             _multiSeen[key] = row;
             _multiRows.Add(row);
             MultiGrid.ScrollIntoView(row);
-            FlashRow(row);
+            FlashRow(MultiGrid, row);
             // 신규 바코드에만 비프 1회 (중복은 무음)
             if (_scanner?.ActiveScanner is { } bdev)
                 Task.Run(() => _scanner.Beep(bdev.Id, 0));
@@ -770,11 +805,12 @@ public partial class MainWindow : Window
         BigCountText.Text = _multiSeen.Count.ToString();
     }
 
-    /// <summary>판독된 행을 연한 앰버색으로 잠깐 하이라이트 후 부드럽게 사라지게 표시</summary>
-    private void FlashRow(MultiScanRow row)
+    /// <summary>판독된 행을 연한 앰버색으로 잠깐 하이라이트 후 부드럽게 사라지게 표시.
+    /// 종료 시 Background 로컬값을 지워 행 스타일(LOT 묶음 배경 등)이 다시 적용되게 한다.</summary>
+    private static void FlashRow(System.Windows.Controls.DataGrid grid, object row)
     {
-        MultiGrid.UpdateLayout();
-        if (MultiGrid.ItemContainerGenerator.ContainerFromItem(row) is not System.Windows.Controls.DataGridRow dgr)
+        grid.UpdateLayout();
+        if (grid.ItemContainerGenerator.ContainerFromItem(row) is not System.Windows.Controls.DataGridRow dgr)
             return;
         var color = System.Windows.Media.Color.FromArgb(70, 255, 193, 7); // 연한 앰버
         var brush = new System.Windows.Media.SolidColorBrush(color);
@@ -785,7 +821,7 @@ public partial class MainWindow : Window
             Duration = TimeSpan.FromMilliseconds(650),
             FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
         };
-        anim.Completed += (_, _) => dgr.Background = System.Windows.Media.Brushes.Transparent;
+        anim.Completed += (_, _) => dgr.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
         brush.BeginAnimation(System.Windows.Media.SolidColorBrush.ColorProperty, anim);
     }
 

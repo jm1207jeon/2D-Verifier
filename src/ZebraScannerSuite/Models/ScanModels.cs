@@ -26,6 +26,16 @@ public class FieldValue
     public string Value { get; set; } = "";
 }
 
+/// <summary>일반 스캔 탭 실시간 목록 행. GroupBrush: 연속된 같은 LOT 묶음의 배경색</summary>
+public class ScanListRow
+{
+    public string Lot { get; set; } = "";
+    public string Exp { get; set; } = "";
+    public string Pn { get; set; } = "";
+    public string Sn { get; set; } = "";
+    public string GroupBrush { get; set; } = "#00FFFFFF";
+}
+
 /// <summary>멀티 스캔 판독 목록 행 (응용식별자별 분리, 중복은 Count만 증가)</summary>
 public class MultiScanRow
 {

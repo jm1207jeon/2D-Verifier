@@ -42,6 +42,15 @@ public class AppSettings
     /// <summary>멀티 스캔 탭: 판독 시마다 배경에서 사진 자동 저장 (화면 표시 없음)</summary>
     public bool MultiSaveImage { get; set; }
 
+    /// <summary>저장 경로 안에 날짜(YYYY-MM-DD) 폴더를 자동 생성해 저장 (기본 켜짐)</summary>
+    public bool SaveDateFolder { get; set; } = true;
+
+    /// <summary>UDI에서 추출한 LOT명 폴더를 자동 생성해 저장 (날짜 폴더와 중첩 가능)</summary>
+    public bool SaveLotFolder { get; set; }
+
+    /// <summary>일반 스캔: 중복 스캔값은 화면 표시만 하고 키보드 입력은 생략 (기본 켜짐)</summary>
+    public bool IgnoreDuplicates { get; set; } = true;
+
     public ObservableCollection<ExtractionRule> ExtractionRules { get; set; } = DefaultExtractionRules();
 
     /// <summary>기본 추출 필드: GTIN(01) / LOT(10) / PN(240) / MFG DATE(11) / EXP DATE(17) / SN(21) / UPN(30)</summary>

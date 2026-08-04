@@ -27,15 +27,26 @@ public static class ImageSaveService
         return s.Length > 80 ? s[..80] : s;
     }
 
-    /// <summary>이미지 저장 후 전체 경로 반환</summary>
+    /// <summary>이미지 저장 후 전체 경로 반환.
+    /// 옵션에 따라 날짜(YYYY-MM-DD)·LOT명 하위 폴더를 자동 생성해 그 안에 저장한다.</summary>
     public static string Save(byte[] imageBytes, string barcode, string symbology, string ocr, AppSettings settings)
     {
-        Directory.CreateDirectory(settings.ImageSaveDirectory);
+        string dir = settings.ImageSaveDirectory;
+        if (settings.SaveDateFolder)
+            dir = Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd"));
+        if (settings.SaveLotFolder)
+        {
+            string lot = "";
+            try { lot = Gs1Parser.Parse(barcode).GetValueOrDefault("10", ""); } catch { }
+            if (!string.IsNullOrWhiteSpace(lot))
+                dir = Path.Combine(dir, SanitizeFileName(lot));
+        }
+        Directory.CreateDirectory(dir);
         string ext = DetectExtension(imageBytes);
         string rule = string.IsNullOrWhiteSpace(settings.FileNameRule)
             ? "{DATE:yyyyMMdd}_{BARCODE}_{SEQ:3}" : settings.FileNameRule;
 
-        string path = BuildPath(settings.ImageSaveDirectory, rule, barcode, symbology, ocr, ext);
+        string path = BuildPath(dir, rule, barcode, symbology, ocr, ext);
         File.WriteAllBytes(path, imageBytes);
         return path;
     }
