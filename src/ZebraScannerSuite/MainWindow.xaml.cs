@@ -34,7 +34,13 @@ public partial class MainWindow : Window
     private int _lastPixelW, _lastPixelH;
     private BarcodeData? _pendingScan;          // 이미지 대기 중인 바코드
     private bool _awaitingScanImage;
-    private readonly DispatcherTimer _imageTimeout = new() { Interval = TimeSpan.FromSeconds(4) };
+    // 블루투스/저속 스캐너(DS2278 등)의 이미지 전송 시간을 고려해 여유 있게 대기
+    private readonly DispatcherTimer _imageTimeout = new() { Interval = TimeSpan.FromSeconds(8) };
+
+    // 일반(비 Zebra) HID 키보드 스캐너 지원: 창이 활성일 때 빠른 연속 입력 + Enter를 스캔으로 인식
+    private readonly StringBuilder _kbdScanBuf = new();
+    private DateTime _kbdScanLast = DateTime.MinValue;
+    private const int KbdScanGapMs = 80; // 스캐너 타이핑 문자 간격 상한 (사람 타이핑과 구분)
 
     // 강제 스캔: 하드웨어 디코더 재시도 대기용
     private TaskCompletionSource<BarcodeData>? _forceDecodeTcs;
@@ -233,8 +239,13 @@ public partial class MainWindow : Window
         }
         ScannerStatusText.Text = $"스캐너: {s.Model} (S/N {s.Serial}) [{s.Type}]";
         if (!s.Type.Contains("SNAPI", StringComparison.OrdinalIgnoreCase))
-            SetStatus($"현재 {s.Type} 모드입니다. 이미지 캡처/검증 기능은 'USB SNAPI (이미징 지원)' 전환 후 사용하세요.");
+            SetStatus($"현재 {s.Type} 모드 - 바코드 스캔은 정상 동작하며, 이미지 캡처(사진 저장/강제 스캔)만 제한됩니다.");
     }
+
+    /// <summary>현재 스캐너가 이미지 캡처(SNAPI 이미징)를 지원하는 모드인지.
+    /// DS9908 등 SNAPI 기종은 지원, 기타 모드/일반 스캐너는 바코드 스캔만 가능.</summary>
+    private bool ImagingSupported =>
+        _scanner?.ActiveScanner?.Type.Contains("SNAPI", StringComparison.OrdinalIgnoreCase) == true;
 
     private void UpdateBusy()
     {
@@ -304,6 +315,12 @@ public partial class MainWindow : Window
         if (mode == 0 || _scanner?.ActiveScanner is not { } dev)
         {
             SetStatus($"바코드 리딩 완료: {b.Symbology}");
+            return;
+        }
+        if (!ImagingSupported)
+        {
+            // 이미징 미지원 스캐너(모드): 바코드는 정상 처리하고 촬영만 생략
+            SetStatus($"바코드 리딩 완료: {b.Symbology} (이 스캐너는 이미지 캡처 미지원 - 바코드만 처리)");
             return;
         }
 
@@ -414,6 +431,10 @@ public partial class MainWindow : Window
                 SetStatus("스캐너 미연결 - 강제 스캔 모드는 스캐너 연결 후 동작합니다.");
             return;
         }
+        if (ForceScanCheck.IsChecked == true && !ImagingSupported)
+        {
+            SetStatus("이 스캐너는 촬영(이미징)을 지원하지 않아 강제 스캔은 일반 디코드로 동작합니다.");
+        }
         EnsureScannerMode(ForceScanCheck.IsChecked == true ? "강제 스캔 ON" : "강제 스캔 OFF");
     }
 
@@ -471,7 +492,9 @@ public partial class MainWindow : Window
                     _scanner.SetKeyboardEmulator(false);
                     _scanner.ScanEnable(dev.Id);
                     _scanner.SetBeepAfterGoodDecode(dev.Id, !multiTab); // 멀티 탭: 중복 무음, 신규만 앱 비프
-                    bool ok = forceScan
+                    // 이미징 미지원 기종/모드에서는 촬영 모드 대신 디코드 모드로 동작 (바코드 스캔 우선)
+                    bool imaging = dev.Type.Contains("SNAPI", StringComparison.OrdinalIgnoreCase);
+                    bool ok = forceScan && imaging
                         ? _scanner.SetCaptureImageMode(dev.Id)
                         : _scanner.SetCaptureBarcodeMode(dev.Id);
                     if (ok)
@@ -503,7 +526,40 @@ public partial class MainWindow : Window
         {
             ForceScanCheck.IsChecked = ForceScanCheck.IsChecked != true;
             e.Handled = true;
+            return;
         }
+
+        // 일반(HID 키보드) 스캐너: 빠른 연속 입력 직후의 Enter를 스캔 종료로 인식.
+        // 텍스트 입력란에 포커스가 있으면 관여하지 않는다 (HID 입력창은 자체 처리).
+        if (e.Key is Key.Enter or Key.Return &&
+            Keyboard.FocusedElement is not System.Windows.Controls.TextBox)
+        {
+            if (_kbdScanBuf.Length >= 5 &&
+                (DateTime.Now - _kbdScanLast).TotalMilliseconds <= KbdScanGapMs * 2)
+            {
+                string text = _kbdScanBuf.ToString();
+                _kbdScanBuf.Clear();
+                OnBarcode(new BarcodeData { Text = text, Symbology = "HID-KBD", Time = DateTime.Now });
+                e.Handled = true;
+            }
+            else
+            {
+                _kbdScanBuf.Clear();
+            }
+        }
+    }
+
+    /// <summary>일반(비 Zebra) 키보드 스캐너 리스너: 창이 활성일 때 문자 입력을 관찰만 한다.
+    /// 문자 간격이 사람 타이핑보다 빠른 연속 입력만 버퍼에 모으고, Enter에서 스캔으로 확정한다.
+    /// CoreScanner(SNAPI) 스캐너는 키 입력이 아닌 이벤트로 들어오므로 중복 처리되지 않는다.</summary>
+    private void Window_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (Keyboard.FocusedElement is System.Windows.Controls.TextBox) return; // 직접 입력 중이면 무시
+        var now = DateTime.Now;
+        if ((now - _kbdScanLast).TotalMilliseconds > KbdScanGapMs) _kbdScanBuf.Clear();
+        _kbdScanLast = now;
+        foreach (char c in e.Text)
+            if (!char.IsControl(c)) _kbdScanBuf.Append(c);
     }
 
     private void ProcessForceImage(byte[] bytes)
@@ -804,8 +860,13 @@ public partial class MainWindow : Window
     private void MultiCaptureImage(BarcodeData b)
     {
         if (_scanner?.ActiveScanner is not { } dev) return;
-        // 이전 촬영이 3초 안에 완료되지 않았으면 미수신으로 보고 새로 진행
-        bool inFlight = _multiImageScan != null && (DateTime.Now - _multiImageAt).TotalSeconds < 3;
+        if (!ImagingSupported)
+        {
+            SetStatus("사진 저장: 이 스캐너는 촬영을 지원하지 않아 바코드만 기록합니다.");
+            return;
+        }
+        // 이전 촬영이 완료되지 않았으면 대기 (블루투스 등 저속 전송 고려 8초 후 자동 해제)
+        bool inFlight = _multiImageScan != null && (DateTime.Now - _multiImageAt).TotalSeconds < 8;
         if (inFlight) return;
         _multiImageScan = b;
         _multiImageAt = DateTime.Now;
@@ -864,6 +925,8 @@ public partial class MainWindow : Window
             // 신규 바코드에만 비프 1회 (중복은 무음)
             if (_scanner?.ActiveScanner is { } bdev)
                 Task.Run(() => _scanner.Beep(bdev.Id, 0));
+            else
+                System.Media.SystemSounds.Beep.Play(); // 일반(HID) 스캐너: PC 비프로 대체
         }
 
         // ---- 가로 모드(파생 뷰): LOT당 1행, 시리얼은 SN 셀에 콤마 누적 ----

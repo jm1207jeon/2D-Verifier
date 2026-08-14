@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="UDI Capture_ver.1" Height="880" Width="1400"
         WindowStartupLocation="CenterScreen"
-        Loaded="Window_Loaded" Closing="Window_Closing" KeyDown="Window_KeyDown">
+        Loaded="Window_Loaded" Closing="Window_Closing" KeyDown="Window_KeyDown"
+        PreviewTextInput="Window_PreviewTextInput">
     <DockPanel>
         <!-- ===================== 상태바 ===================== -->
         <StatusBar DockPanel.Dock="Bottom" Height="30">
@@ -70,10 +71,10 @@
                                         <TextBlock x:Name="BarcodeText" FontSize="24" FontWeight="Bold" TextWrapping="Wrap"/>
                                     </Border>
                                     <DockPanel Margin="0,4,0,0">
-                                        <TextBlock Text="HID 키보드 입력(HID 모드 시 여기에 스캔): " VerticalAlignment="Center"/>
+                                        <TextBlock Text="키보드 스캐너 입력: " VerticalAlignment="Center"/>
                                         <TextBox x:Name="HidInputBox" Width="260" HorizontalAlignment="Left"
                                                  KeyDown="HidInputBox_KeyDown"
-                                                 ToolTip="스캐너가 HID 키보드 모드일 때 이 칸에 포커스를 두고 스캔하면 동일하게 처리됩니다 (Enter 종료 문자 필요)"/>
+                                                 ToolTip="일반(키보드 방식) 스캐너는 이 창이 활성화되어 있으면 포커스 없이도 자동 인식됩니다. 자동 인식이 안 되는 스캐너만 이 칸에 포커스를 두고 스캔하세요 (Enter 종료 문자 필요)"/>
                                     </DockPanel>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Margin="8,0,0,0">
