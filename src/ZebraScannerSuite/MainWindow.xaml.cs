@@ -40,8 +40,13 @@ public partial class MainWindow : Window
     private TaskCompletionSource<BarcodeData>? _forceDecodeTcs;
 
     // Multi 탭 상태
-    private readonly ObservableCollection<MultiScanRow> _multiRows = new();
+    private readonly ObservableCollection<MultiScanRow> _multiRows = new();   // 세로: 고유 코드당 1행
     private readonly Dictionary<string, MultiScanRow> _multiSeen = new();
+    private readonly ObservableCollection<MultiLotRow> _multiLotRows = new(); // 가로: LOT당 1행 (세로 데이터에서 실시간 파생)
+    private readonly Dictionary<string, MultiLotRow> _multiLotSeen = new();
+    // 헤더 클릭 정렬 상태 (클릭 순서대로 다중 정렬, 오름→내림→해제 순환)
+    private readonly List<(string Member, System.ComponentModel.ListSortDirection Dir)> _multiSortV = new();
+    private readonly List<(string Member, System.ComponentModel.ListSortDirection Dir)> _multiSortH = new();
     private int _multiTotal;
     private bool _multiActive; // 멀티 스캔 수신 중
     private BarcodeData? _multiImageScan; // 멀티 탭 배경 사진 저장 대기 중인 판독 건
@@ -60,6 +65,7 @@ public partial class MainWindow : Window
         FieldsGrid.ItemsSource = _fields;
         ScanListGrid.ItemsSource = _scanRows;
         MultiGrid.ItemsSource = _multiRows;
+        MultiLotGrid.ItemsSource = _multiLotRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
         _scannerWatchdog.Tick += ScannerWatchdog_Tick;
     }
@@ -165,6 +171,13 @@ public partial class MainWindow : Window
 
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode >= 1;
+
+        // 멀티 탭 보기 모드 + 사용자 컬럼 폭 복원
+        MultiViewVertical.IsChecked = _settings.MultiViewMode == 0;
+        MultiViewHorizontal.IsChecked = _settings.MultiViewMode == 1;
+        ApplyMultiViewVisibility();
+        ApplyColWidths(MultiGrid, _settings.MultiColWidthsV);
+        ApplyColWidths(MultiLotGrid, _settings.MultiColWidthsH);
     }
 
     private void CollectSettingsFromUi()
@@ -177,6 +190,21 @@ public partial class MainWindow : Window
         _settings.SaveLotFolder = SaveLotFolderCheck.IsChecked == true;
         _settings.IgnoreDuplicates = DupIgnoreCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
+        _settings.MultiViewMode = MultiViewHorizontal.IsChecked == true ? 1 : 0;
+
+        // 사용자가 조절한 컬럼 폭 저장 (레이아웃 전이라 폭이 0이면 기존 값 유지)
+        var wv = MultiGrid.Columns.Select(c => c.ActualWidth).ToList();
+        if (wv.Count > 0 && wv.All(w => w > 0)) _settings.MultiColWidthsV = wv;
+        var wh = MultiLotGrid.Columns.Select(c => c.ActualWidth).ToList();
+        if (wh.Count > 0 && wh.All(w => w > 0)) _settings.MultiColWidthsH = wh;
+    }
+
+    /// <summary>저장된 컬럼 폭 복원 (컬럼 수가 바뀐 구버전 설정은 무시)</summary>
+    private static void ApplyColWidths(System.Windows.Controls.DataGrid grid, List<double>? widths)
+    {
+        if (widths == null || widths.Count != grid.Columns.Count) return;
+        for (int i = 0; i < widths.Count; i++)
+            if (widths[i] > 10) grid.Columns[i].Width = new DataGridLength(widths[i]);
     }
 
     /// <summary>설정 컨트롤 변경 시 자동 저장 (설정 저장 버튼 대체)</summary>
@@ -794,27 +822,39 @@ public partial class MainWindow : Window
         _multiTotal++;
         string key = b.Symbology + "|" + b.Text;
 
-        if (_multiSeen.TryGetValue(key, out var row))
+        var ai = Gs1Parser.Parse(b.Text);
+        string lot = ai.GetValueOrDefault("10", "");
+        string sn = ai.GetValueOrDefault("21", "");
+        // AI 30: 사내 라벨은 'M…'=UPN, 표준 GS1은 숫자=수량(QTY). AI 37도 수량.
+        string v30 = ai.GetValueOrDefault("30", "");
+        bool v30IsQty = v30.Length > 0 && v30.All(char.IsDigit);
+        string qty = ai.GetValueOrDefault("37", "");
+        if (qty.Length == 0 && v30IsQty) qty = v30;
+        string upn = v30IsQty ? "" : v30;
+
+        // ---- 세로 모드(마스터 데이터): 고유 코드당 1행, 중복은 Count 증가 ----
+        bool isNewCode = !_multiSeen.TryGetValue(key, out var row);
+        if (!isNewCode)
         {
-            row.Count++;
+            row!.Count++;
             MultiGrid.Items.Refresh();
             MultiGrid.ScrollIntoView(row);
             FlashRow(MultiGrid, row);
         }
         else
         {
-            var ai = Gs1Parser.Parse(b.Text);
             row = new MultiScanRow
             {
                 No = _multiRows.Count + 1,
                 TimeText = b.Time.ToString("HH:mm:ss"),
                 Gtin = ai.GetValueOrDefault("01", ""),
-                Lot = ai.GetValueOrDefault("10", ""),
+                Lot = lot,
                 Mfg = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("11", "")),
                 Exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", "")),
                 Pn = ai.GetValueOrDefault("240", ""),
-                Sn = ai.GetValueOrDefault("21", ""),
-                Upn = ai.GetValueOrDefault("30", ""),
+                Sn = sn,
+                Qty = qty,
+                Upn = upn,
                 Raw = b.Text,
             };
             _multiSeen[key] = row;
@@ -825,8 +865,52 @@ public partial class MainWindow : Window
             if (_scanner?.ActiveScanner is { } bdev)
                 Task.Run(() => _scanner.Beep(bdev.Id, 0));
         }
+
+        // ---- 가로 모드(파생 뷰): LOT당 1행, 시리얼은 SN 셀에 콤마 누적 ----
+        string lotKey = lot.Length > 0 ? lot : "@" + b.Text; // LOT 없는 코드는 코드별 행
+        if (_multiLotSeen.TryGetValue(lotKey, out var lrow))
+        {
+            if (isNewCode && sn.Length > 0 && !lrow.Serials.Contains(sn))
+            {
+                lrow.Serials.Add(sn);
+                lrow.Sn = string.Join(", ", lrow.Serials);
+                MultiLotGrid.Items.Refresh();
+                MultiLotGrid.ScrollIntoView(lrow);
+                FlashRow(MultiLotGrid, lrow);
+                FlashCell(MultiLotGrid, lrow, MultiLotSnColumn); // 시리얼 추가는 SN 셀을 더 강하게 강조
+            }
+            else
+            {
+                MultiLotGrid.ScrollIntoView(lrow);
+                FlashRow(MultiLotGrid, lrow);
+            }
+        }
+        else
+        {
+            lrow = new MultiLotRow
+            {
+                No = _multiLotRows.Count + 1,
+                TimeText = b.Time.ToString("HH:mm:ss"),
+                Udi = b.Text,
+                Gtin = ai.GetValueOrDefault("01", ""),
+                Pn = ai.GetValueOrDefault("240", ""),
+                Lot = lot,
+                Mfg = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("11", "")),
+                Exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", "")),
+                Qty = qty,
+                Upn = upn,
+            };
+            if (sn.Length > 0) { lrow.Serials.Add(sn); lrow.Sn = sn; }
+            _multiLotSeen[lotKey] = lrow;
+            _multiLotRows.Add(lrow);
+            MultiLotGrid.ScrollIntoView(lrow);
+            FlashRow(MultiLotGrid, lrow);
+        }
+
         MultiTotalText.Text = _multiTotal.ToString();
         BigCountText.Text = _multiSeen.Count.ToString();
+        // 총 배치 수 = 중복 없는 고유 LOT 개수 (LOT 없는 코드의 행은 제외)
+        BatchCountText.Text = _multiLotSeen.Keys.Count(k => !k.StartsWith('@')).ToString();
     }
 
     /// <summary>판독된 행을 연한 앰버색으로 잠깐 하이라이트 후 부드럽게 사라지게 표시.
@@ -853,25 +937,122 @@ public partial class MainWindow : Window
     {
         _multiRows.Clear();
         _multiSeen.Clear();
+        _multiLotRows.Clear();
+        _multiLotSeen.Clear();
         _multiTotal = 0;
         MultiTotalText.Text = "0";
         BigCountText.Text = "0";
+        BatchCountText.Text = "0";
+    }
+
+    /// <summary>세로/가로 보기 전환. 데이터는 두 뷰 모두 실시간 유지되므로 언제든 전환 가능.</summary>
+    private void MultiView_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        ApplyMultiViewVisibility();
+        AutoSaveSettings();
+    }
+
+    private void ApplyMultiViewVisibility()
+    {
+        bool horiz = MultiViewHorizontal.IsChecked == true;
+        MultiGrid.Visibility = horiz ? Visibility.Collapsed : Visibility.Visible;
+        MultiLotGrid.Visibility = horiz ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>헤더 클릭 정렬: 오름차순 → 내림차순 → 기본(해제) 순환.
+    /// 서로 다른 컬럼을 이어서 클릭하면 클릭 순서대로 다중 정렬이 조합된다.
+    /// 스캔으로 새 행이 추가될 때도 현재 정렬 순서에 맞는 위치에 실시간 삽입된다.</summary>
+    private void MultiGrid_Sorting(object sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true; // 기본 정렬 동작 대신 순환/조합 규칙 적용
+        var grid = (System.Windows.Controls.DataGrid)sender;
+        var sorts = grid == MultiLotGrid ? _multiSortH : _multiSortV;
+        string member = e.Column.SortMemberPath;
+        if (string.IsNullOrEmpty(member)) return;
+
+        int idx = sorts.FindIndex(s => s.Member == member);
+        if (idx < 0)
+            sorts.Add((member, System.ComponentModel.ListSortDirection.Ascending));
+        else if (sorts[idx].Dir == System.ComponentModel.ListSortDirection.Ascending)
+            sorts[idx] = (member, System.ComponentModel.ListSortDirection.Descending);
+        else
+            sorts.RemoveAt(idx); // 내림차순에서 한 번 더 클릭 → 기본(정렬 해제)
+
+        ApplySorts(grid, sorts);
+    }
+
+    private static void ApplySorts(System.Windows.Controls.DataGrid grid,
+        List<(string Member, System.ComponentModel.ListSortDirection Dir)> sorts)
+    {
+        var view = System.Windows.Data.CollectionViewSource.GetDefaultView(grid.ItemsSource);
+        if (view == null) return;
+        using (view.DeferRefresh())
+        {
+            view.SortDescriptions.Clear();
+            foreach (var (m, d) in sorts)
+                view.SortDescriptions.Add(new System.ComponentModel.SortDescription(m, d));
+        }
+        // 헤더 정렬 화살표 표시 동기화
+        foreach (var col in grid.Columns)
+        {
+            col.SortDirection = null;
+            foreach (var (m, d) in sorts)
+                if (m == col.SortMemberPath) { col.SortDirection = d; break; }
+        }
+    }
+
+    /// <summary>특정 셀을 행 하이라이트보다 진하게 강조 (가로 모드에서 시리얼 추가 시 SN 셀)</summary>
+    private static void FlashCell(System.Windows.Controls.DataGrid grid, object row, DataGridColumn col)
+    {
+        grid.UpdateLayout();
+        if (grid.ItemContainerGenerator.ContainerFromItem(row) is not System.Windows.Controls.DataGridRow dgr)
+            return;
+        if (col.GetCellContent(dgr)?.Parent is not System.Windows.Controls.DataGridCell cell)
+            return;
+        var brush = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromArgb(170, 255, 152, 0)); // 진한 주황
+        cell.Background = brush;
+        var anim = new System.Windows.Media.Animation.ColorAnimation
+        {
+            To = System.Windows.Media.Color.FromArgb(0, 255, 152, 0),
+            Duration = TimeSpan.FromMilliseconds(900),
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop,
+        };
+        anim.Completed += (_, _) => cell.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+        brush.BeginAnimation(System.Windows.Media.SolidColorBrush.ColorProperty, anim);
     }
 
     private void MultiExport_Click(object sender, RoutedEventArgs e)
     {
         if (_multiRows.Count == 0) { SetStatus("내보낼 데이터가 없습니다."); return; }
+        bool horiz = MultiViewHorizontal.IsChecked == true;
         var dlg = new SaveFileDialog
         {
             Title = "CSV 내보내기",
             Filter = "CSV 파일|*.csv",
-            FileName = $"multiscan_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+            FileName = $"multiscan_{(horiz ? "lot" : "scan")}_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
         };
         if (dlg.ShowDialog(this) != true) return;
+
+        // 현재 보기 모드의 컬럼 구조와 화면 정렬 순서 그대로 내보낸다
         var sb = new StringBuilder();
-        sb.AppendLine("No,Time,GTIN,LOT,MFG,EXP,PN,SN,UPN,Raw,Count");
-        foreach (var r in _multiRows)
-            sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Gtin)},{CsvText(r.Lot)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Pn)},{CsvText(r.Sn)},{CsvText(r.Upn)},{CsvText(r.Raw)},{r.Count}");
+        if (horiz)
+        {
+            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,QTY,UPN");
+            var view = System.Windows.Data.CollectionViewSource.GetDefaultView(MultiLotGrid.ItemsSource);
+            foreach (var o in view)
+                if (o is MultiLotRow r)
+                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Udi)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{Csv(r.Qty)},{CsvText(r.Upn)}");
+        }
+        else
+        {
+            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,QTY,UPN,Count");
+            var view = System.Windows.Data.CollectionViewSource.GetDefaultView(MultiGrid.ItemsSource);
+            foreach (var o in view)
+                if (o is MultiScanRow r)
+                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Raw)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{Csv(r.Qty)},{CsvText(r.Upn)},{r.Count}");
+        }
         try
         {
             File.WriteAllText(dlg.FileName, sb.ToString(), new UTF8Encoding(true));

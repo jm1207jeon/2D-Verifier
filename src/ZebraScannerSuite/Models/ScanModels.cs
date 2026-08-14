@@ -36,7 +36,7 @@ public class ScanListRow
     public string GroupBrush { get; set; } = "#00FFFFFF";
 }
 
-/// <summary>멀티 스캔 판독 목록 행 (응용식별자별 분리, 중복은 Count만 증가)</summary>
+/// <summary>멀티 스캔 세로 모드 행: 고유 코드당 1행, 중복 스캔은 Count만 증가</summary>
 public class MultiScanRow
 {
     public int No { get; set; }
@@ -47,8 +47,26 @@ public class MultiScanRow
     public string Exp { get; set; } = "";
     public string Pn { get; set; } = "";
     public string Sn { get; set; } = "";
+    public string Qty { get; set; } = "";
     public string Upn { get; set; } = "";
     public string Raw { get; set; } = "";
     public int Count { get; set; } = 1;
+}
+
+/// <summary>멀티 스캔 가로 모드 행: LOT당 1행, 시리얼은 Sn에 콤마로 누적</summary>
+public class MultiLotRow
+{
+    public int No { get; set; }
+    public string TimeText { get; set; } = "";
+    public string Udi { get; set; } = "";
+    public string Gtin { get; set; } = "";
+    public string Pn { get; set; } = "";
+    public string Lot { get; set; } = "";
+    public List<string> Serials { get; } = new();
+    public string Sn { get; set; } = "";
+    public string Mfg { get; set; } = "";
+    public string Exp { get; set; } = "";
+    public string Qty { get; set; } = "";
+    public string Upn { get; set; } = "";
 }
 

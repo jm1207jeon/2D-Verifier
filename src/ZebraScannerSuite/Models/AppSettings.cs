@@ -51,6 +51,15 @@ public class AppSettings
     /// <summary>일반 스캔: 중복 스캔값은 화면 표시만 하고 키보드 입력은 생략 (기본 켜짐)</summary>
     public bool IgnoreDuplicates { get; set; } = true;
 
+    /// <summary>멀티 스캔 보기 모드: 0=세로(스캔당 1행), 1=가로(LOT당 1행, SN 콤마 누적)</summary>
+    public int MultiViewMode { get; set; }
+
+    /// <summary>멀티 스캔 세로 모드 컬럼 폭 (사용자 조절값, 재실행 시 복원)</summary>
+    public List<double> MultiColWidthsV { get; set; } = new();
+
+    /// <summary>멀티 스캔 가로 모드 컬럼 폭 (사용자 조절값, 재실행 시 복원)</summary>
+    public List<double> MultiColWidthsH { get; set; } = new();
+
     public ObservableCollection<ExtractionRule> ExtractionRules { get; set; } = DefaultExtractionRules();
 
     /// <summary>기본 추출 필드: GTIN(01) / LOT(10) / PN(240) / MFG DATE(11) / EXP DATE(17) / SN(21) / UPN(30)</summary>
