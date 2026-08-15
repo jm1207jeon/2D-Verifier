@@ -20,6 +20,21 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      # 자동 회귀 테스트: 파서/추출/저장 규칙 (실패 시 빌드 중단 - 검증된 라벨 보호)
+      - name: Run unit tests
+        run: >
+          dotnet test src/ZebraScannerSuite.Tests -c Release
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+
+      # 테스트 결과 증적 보관 (밸리데이션 객관적 증거 자료)
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+
       # .NET 런타임 포함 단일 exe (사용 PC에 .NET 설치 불필요, Zebra SDK만 필요)
       - name: Publish self-contained single-file exe
         run: >
