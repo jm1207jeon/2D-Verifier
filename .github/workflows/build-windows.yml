@@ -53,13 +53,6 @@ jobs:
       - name: Zip for release
         run: Compress-Archive -Path publish/* -DestinationPath UDI-Capture-win-x64.zip
 
-      # 구버전 이름의 zip이 릴리스에 남아 혼동을 주지 않도록 제거
-      - name: Remove stale release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release delete-asset latest-build ZebraScannerSuite-win-x64.zip --yes --repo ${{ github.repository }}
-        continue-on-error: true
-
       # 항상 최신 빌드를 'latest-build' 릴리스에 게시 (Releases 페이지에서 바로 다운로드)
       - name: Publish rolling release
         uses: softprops/action-gh-release@v2
