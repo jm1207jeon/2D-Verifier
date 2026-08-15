@@ -42,6 +42,13 @@ public partial class MainWindow : Window
     private DateTime _kbdScanLast = DateTime.MinValue;
     private const int KbdScanGapMs = 80; // 스캐너 타이핑 문자 간격 상한 (사람 타이핑과 구분)
 
+    // 실시간 스캔 속도 표시 (최근 60초 스캔 시각 기록)
+    private readonly Queue<DateTime> _scanTimes = new();
+    private readonly DispatcherTimer _scanRateTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+
+    // 키보드 에뮬레이터(Caps Lock 토글 원인) 재비활성화 주기 제한
+    private DateTime _lastKbdEmuOff = DateTime.MinValue;
+
     // 강제 스캔: 하드웨어 디코더 재시도 대기용
     private TaskCompletionSource<BarcodeData>? _forceDecodeTcs;
 
@@ -74,6 +81,29 @@ public partial class MainWindow : Window
         MultiLotGrid.ItemsSource = _multiLotRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
         _scannerWatchdog.Tick += ScannerWatchdog_Tick;
+        _scanRateTimer.Tick += ScanRateTimer_Tick;
+        _scanRateTimer.Start();
+    }
+
+    private void RecordScanRate()
+    {
+        _scanTimes.Enqueue(DateTime.Now);
+        while (_scanTimes.Count > 0 && (DateTime.Now - _scanTimes.Peek()).TotalSeconds > 60)
+            _scanTimes.Dequeue();
+    }
+
+    /// <summary>1초마다 최근 스캔 간격 평균으로 분당 스캔 속도를 갱신 (1초당 1회 = 60 Unit/Min)</summary>
+    private void ScanRateTimer_Tick(object? sender, EventArgs e)
+    {
+        while (_scanTimes.Count > 0 && (DateTime.Now - _scanTimes.Peek()).TotalSeconds > 60)
+            _scanTimes.Dequeue();
+        double rate = 0;
+        if (_scanTimes.Count >= 2 && (DateTime.Now - _scanTimes.Last()).TotalSeconds <= 10)
+        {
+            double span = (_scanTimes.Last() - _scanTimes.Peek()).TotalSeconds;
+            if (span > 0) rate = (_scanTimes.Count - 1) / span * 60.0;
+        }
+        ScanRateText.Text = $"스캔 속도 {rate:0} Unit/Min";
     }
 
     /// <summary>10초마다 연결 상태 점검: 연동 실패 시 재시도, 목록이 비면 재검색.
@@ -278,6 +308,14 @@ public partial class MainWindow : Window
     {
         // 강제 스캔의 하드웨어 재판독 대기 중이면 해당 흐름으로 전달
         if (_forceDecodeTcs != null && _forceDecodeTcs.TrySetResult(b)) return;
+
+        // 모드 전환/재연결 후 드라이버의 HID 키보드 에뮬레이터가 되살아나 스캔마다
+        // Caps Lock이 토글되는 문제 방지: 스캔 이벤트 시 주기적으로 재차 비활성화
+        if (_scanner != null && (DateTime.Now - _lastKbdEmuOff).TotalSeconds > 5)
+        {
+            _lastKbdEmuOff = DateTime.Now;
+            Task.Run(() => { try { _scanner.SetKeyboardEmulator(false); } catch { } });
+        }
 
         if (MainTabs.SelectedIndex == 1) // Multi / Continuous 탭
         {
@@ -530,7 +568,9 @@ public partial class MainWindow : Window
         }
 
         // 일반(HID 키보드) 스캐너: 빠른 연속 입력 직후의 Enter를 스캔 종료로 인식.
+        // CoreScanner 스캐너가 연결돼 있으면 비활성 (에뮬레이터 에코로 인한 이중 입력 방지).
         // 텍스트 입력란에 포커스가 있으면 관여하지 않는다 (HID 입력창은 자체 처리).
+        if (_scanner?.ActiveScanner != null) { _kbdScanBuf.Clear(); return; }
         if (e.Key is Key.Enter or Key.Return &&
             Keyboard.FocusedElement is not System.Windows.Controls.TextBox)
         {
@@ -554,6 +594,7 @@ public partial class MainWindow : Window
     /// CoreScanner(SNAPI) 스캐너는 키 입력이 아닌 이벤트로 들어오므로 중복 처리되지 않는다.</summary>
     private void Window_PreviewTextInput(object sender, TextCompositionEventArgs e)
     {
+        if (_scanner?.ActiveScanner != null) return; // CoreScanner 스캐너 연결 시 리스너 비활성
         if (Keyboard.FocusedElement is System.Windows.Controls.TextBox) return; // 직접 입력 중이면 무시
         var now = DateTime.Now;
         if ((now - _kbdScanLast).TotalMilliseconds > KbdScanGapMs) _kbdScanBuf.Clear();
@@ -878,27 +919,46 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>MFG 미기재 라벨의 제조일 역산: 엑셀 EDATE(EXP,-36)+1 (유효기간 36개월 가정).
+    /// exp는 "yyyy-MM-dd" 또는 "yyyy-MM"(일자 00) 형식.</summary>
+    private static bool TryComputeMfgFromExp(string exp, out string mfg)
+    {
+        mfg = "";
+        if (string.IsNullOrEmpty(exp)) return false;
+        string s = exp.Length == 7 ? exp + "-01" : exp; // "yyyy-MM" → 1일로 보정
+        if (!DateTime.TryParseExact(s, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var d))
+            return false;
+        mfg = d.AddMonths(-36).AddDays(1).ToString("yyyy-MM-dd");
+        return true;
+    }
+
     private void AddMultiScan(BarcodeData b)
     {
         _multiTotal++;
-        string key = b.Symbology + "|" + b.Text;
+        RecordScanRate();
+        string key = b.Text; // 중복 판정은 스캔값 기준 (수신 경로가 달라도 같은 라벨은 1행)
 
         var ai = Gs1Parser.Parse(b.Text);
         string lot = ai.GetValueOrDefault("10", "");
         string sn = ai.GetValueOrDefault("21", "");
-        // AI 30: 사내 라벨은 'M…'=UPN, 표준 GS1은 숫자=수량(QTY). AI 37도 수량.
+        // AI 30: 사내 라벨은 'M…'=UPN, 표준 GS1의 숫자형 30(수량)은 UPN이 아님. 없으면 '-' 표시.
         string v30 = ai.GetValueOrDefault("30", "");
-        bool v30IsQty = v30.Length > 0 && v30.All(char.IsDigit);
-        string qty = ai.GetValueOrDefault("37", "");
-        if (qty.Length == 0 && v30IsQty) qty = v30;
-        string upn = v30IsQty ? "" : v30;
+        string upn = v30.Length > 0 && !v30.All(char.IsDigit) ? v30 : "-";
+        string exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", ""));
+        // MFG(11)가 없으면 EXP 기준 역산: 엑셀 EDATE(EXP,-36)+1 (36개월 전 다음날), 파란색 표시
+        string mfg = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("11", ""));
+        bool mfgComputed = false;
+        if (mfg.Length == 0 && TryComputeMfgFromExp(exp, out string computed))
+        {
+            mfg = computed;
+            mfgComputed = true;
+        }
 
-        // ---- 세로 모드(마스터 데이터): 고유 코드당 1행, 중복은 Count 증가 ----
+        // ---- 세로 모드(마스터 데이터): 고유 코드당 1행, 중복은 행 추가 없이 하이라이트만 ----
         bool isNewCode = !_multiSeen.TryGetValue(key, out var row);
         if (!isNewCode)
         {
             row!.Count++;
-            MultiGrid.Items.Refresh();
             MultiGrid.ScrollIntoView(row);
             FlashRow(MultiGrid, row);
         }
@@ -910,16 +970,17 @@ public partial class MainWindow : Window
                 TimeText = b.Time.ToString("HH:mm:ss"),
                 Gtin = ai.GetValueOrDefault("01", ""),
                 Lot = lot,
-                Mfg = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("11", "")),
-                Exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", "")),
+                Mfg = mfg,
+                MfgComputed = mfgComputed,
+                Exp = exp,
                 Pn = ai.GetValueOrDefault("240", ""),
                 Sn = sn,
-                Qty = qty,
                 Upn = upn,
                 Raw = b.Text,
             };
             _multiSeen[key] = row;
             _multiRows.Add(row);
+            if (_multiSortV.Count > 0) UpdateVerticalGrouping(); // 정렬 중이면 묶음 색 재계산
             MultiGrid.ScrollIntoView(row);
             FlashRow(MultiGrid, row);
             // 신규 바코드에만 비프 1회 (중복은 무음)
@@ -929,13 +990,17 @@ public partial class MainWindow : Window
                 System.Media.SystemSounds.Beep.Play(); // 일반(HID) 스캐너: PC 비프로 대체
         }
 
-        // ---- 가로 모드(파생 뷰): LOT당 1행, 시리얼은 SN 셀에 콤마 누적 ----
+        // ---- 가로 모드(파생 뷰): LOT당 1행, 시리얼은 SN 셀에 오름차순 콤마 누적 ----
         string lotKey = lot.Length > 0 ? lot : "@" + b.Text; // LOT 없는 코드는 코드별 행
         if (_multiLotSeen.TryGetValue(lotKey, out var lrow))
         {
             if (isNewCode && sn.Length > 0 && !lrow.Serials.Contains(sn))
             {
                 lrow.Serials.Add(sn);
+                // 1번이 좌측부터 오도록 숫자 오름차순 정렬 (숫자가 아니면 문자열 비교)
+                lrow.Serials.Sort((a, c) =>
+                    int.TryParse(a, out int x) && int.TryParse(c, out int y)
+                        ? x.CompareTo(y) : string.CompareOrdinal(a, c));
                 lrow.Sn = string.Join(", ", lrow.Serials);
                 MultiLotGrid.Items.Refresh();
                 MultiLotGrid.ScrollIntoView(lrow);
@@ -958,9 +1023,9 @@ public partial class MainWindow : Window
                 Gtin = ai.GetValueOrDefault("01", ""),
                 Pn = ai.GetValueOrDefault("240", ""),
                 Lot = lot,
-                Mfg = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("11", "")),
-                Exp = Gs1Parser.FormatGs1Date(ai.GetValueOrDefault("17", "")),
-                Qty = qty,
+                Mfg = mfg,
+                MfgComputed = mfgComputed,
+                Exp = exp,
                 Upn = upn,
             };
             if (sn.Length > 0) { lrow.Serials.Add(sn); lrow.Sn = sn; }
@@ -1043,6 +1108,44 @@ public partial class MainWindow : Window
             sorts.RemoveAt(idx); // 내림차순에서 한 번 더 클릭 → 기본(정렬 해제)
 
         ApplySorts(grid, sorts);
+        if (grid == MultiGrid) UpdateVerticalGrouping();
+    }
+
+    /// <summary>세로 모드 정렬 시 첫 번째 정렬 컬럼의 같은 값끼리 배경색으로 묶어 표시
+    /// (일반 스캔 실시간 목록의 LOT 묶음과 동일한 방식). 정렬 해제 시 색상 제거.</summary>
+    private void UpdateVerticalGrouping()
+    {
+        string? member = _multiSortV.Count > 0 ? _multiSortV[0].Member : null;
+        var view = System.Windows.Data.CollectionViewSource.GetDefaultView(MultiGrid.ItemsSource);
+        var ordered = view.Cast<object>().OfType<MultiScanRow>().ToList();
+        bool alt = false;
+        string? prev = null;
+        foreach (var r in ordered)
+        {
+            if (member == null)
+            {
+                r.GroupBrush = "#00FFFFFF";
+                continue;
+            }
+            string cur = member switch
+            {
+                "No" => r.No.ToString(),
+                "TimeText" => r.TimeText,
+                "Raw" => r.Raw,
+                "Gtin" => r.Gtin,
+                "Pn" => r.Pn,
+                "Lot" => r.Lot,
+                "Sn" => r.Sn,
+                "Mfg" => r.Mfg,
+                "Exp" => r.Exp,
+                "Upn" => r.Upn,
+                _ => "",
+            };
+            if (prev != null && cur != prev) alt = !alt;
+            prev = cur;
+            r.GroupBrush = alt ? "#FFE8F1FA" : "#00FFFFFF";
+        }
+        MultiGrid.Items.Refresh();
     }
 
     private static void ApplySorts(System.Windows.Controls.DataGrid grid,
@@ -1102,19 +1205,19 @@ public partial class MainWindow : Window
         var sb = new StringBuilder();
         if (horiz)
         {
-            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,QTY,UPN");
+            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,UPN");
             var view = System.Windows.Data.CollectionViewSource.GetDefaultView(MultiLotGrid.ItemsSource);
             foreach (var o in view)
                 if (o is MultiLotRow r)
-                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Udi)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{Csv(r.Qty)},{CsvText(r.Upn)}");
+                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Udi)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Upn)}");
         }
         else
         {
-            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,QTY,UPN,Count");
+            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,UPN");
             var view = System.Windows.Data.CollectionViewSource.GetDefaultView(MultiGrid.ItemsSource);
             foreach (var o in view)
                 if (o is MultiScanRow r)
-                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Raw)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{Csv(r.Qty)},{CsvText(r.Upn)},{r.Count}");
+                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Raw)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Upn)}");
         }
         try
         {

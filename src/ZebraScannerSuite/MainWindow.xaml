@@ -172,6 +172,14 @@
                             <Setter Property="TextAlignment" Value="Right"/>
                             <Setter Property="Padding" Value="0,0,6,0"/>
                         </Style>
+                        <!-- MFG 셀: EXP에서 역산된 값이면 파란색으로 구분 표시 -->
+                        <Style x:Key="MfgCell" TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MfgComputed}" Value="True">
+                                    <Setter Property="Foreground" Value="#FF1565C0"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
                     </Grid.Resources>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -197,19 +205,25 @@
                                      ToolTip="LOT당 1행, 시리얼은 SN 셀에 콤마로 누적 (최종 정리용)"/>
                     </WrapPanel>
 
-                    <StackPanel Grid.Row="1" Margin="4,4" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock x:Name="BigCountText" Text="0" FontSize="56" FontWeight="Bold"
-                                   Foreground="#FFE67E00" VerticalAlignment="Center"/>
-                        <TextBlock Text="고유 판독 수" FontSize="14" FontWeight="Bold" Foreground="#FFE67E00"
-                                   VerticalAlignment="Bottom" Margin="8,0,28,10"/>
-                        <TextBlock x:Name="BatchCountText" Text="0" FontSize="56" FontWeight="Bold"
-                                   Foreground="#FF1A6FB5" VerticalAlignment="Center"/>
-                        <TextBlock Text="총 배치 수" FontSize="14" FontWeight="Bold" Foreground="#FF1A6FB5"
-                                   VerticalAlignment="Bottom" Margin="8,0,28,10"
-                                   ToolTip="중복 없는 고유 LOT 개수"/>
-                        <TextBlock Text="총 읽음: " VerticalAlignment="Center"/>
-                        <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50" VerticalAlignment="Center"/>
-                    </StackPanel>
+                    <DockPanel Grid.Row="1" Margin="4,4">
+                        <!-- 우측 상단: 실시간 스캔 속도 (최근 스캔 간격 평균) -->
+                        <TextBlock DockPanel.Dock="Right" x:Name="ScanRateText" Text="스캔 속도 0 Unit/Min"
+                                   FontSize="20" FontWeight="Bold" Foreground="#FF666666"
+                                   VerticalAlignment="Top" Margin="0,4,8,0"/>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="BigCountText" Text="0" FontSize="56" FontWeight="Bold"
+                                       Foreground="#FFE67E00" VerticalAlignment="Center"/>
+                            <TextBlock Text="고유 판독 수" FontSize="14" FontWeight="Bold" Foreground="#FFE67E00"
+                                       VerticalAlignment="Bottom" Margin="8,0,28,10"/>
+                            <TextBlock x:Name="BatchCountText" Text="0" FontSize="56" FontWeight="Bold"
+                                       Foreground="#FF1A6FB5" VerticalAlignment="Center"/>
+                            <TextBlock Text="총 배치 수" FontSize="14" FontWeight="Bold" Foreground="#FF1A6FB5"
+                                       VerticalAlignment="Bottom" Margin="8,0,28,10"
+                                       ToolTip="중복 없는 고유 LOT 개수"/>
+                            <TextBlock Text="총 읽음: " VerticalAlignment="Center"/>
+                            <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </DockPanel>
 
                     <GroupBox Grid.Row="2" Header="판독 목록 (헤더 클릭: 오름차순 → 내림차순 → 기본, 클릭 순서대로 다중 정렬)">
                         <Grid>
@@ -219,23 +233,25 @@
                                       GridLinesVisibility="All" Sorting="MultiGrid_Sorting"
                                       HorizontalGridLinesBrush="#FFDDDDDD" VerticalGridLinesBrush="#FFDDDDDD"
                                       BorderBrush="#FFDDDDDD" RowHeaderWidth="0" RowHeight="24">
+                                <DataGrid.RowStyle>
+                                    <Style TargetType="DataGridRow">
+                                        <Setter Property="Background" Value="{Binding GroupBrush}"/>
+                                    </Style>
+                                </DataGrid.RowStyle>
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="No." Binding="{Binding No}" SortMemberPath="No"
                                                         Width="44" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="Time" Binding="{Binding TimeText}" SortMemberPath="TimeText" Width="72"/>
-                                    <DataGridTextColumn Header="UDI" Binding="{Binding Raw}" SortMemberPath="Raw" Width="*"/>
+                                    <DataGridTextColumn Header="UDI" Binding="{Binding Raw}" SortMemberPath="Raw" Width="450"/>
                                     <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" SortMemberPath="Gtin" Width="120"/>
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
                                     <DataGridTextColumn Header="SN" Binding="{Binding Sn}" SortMemberPath="Sn"
                                                         Width="48" ElementStyle="{StaticResource RightCell}"/>
-                                    <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" SortMemberPath="Mfg" Width="88"/>
+                                    <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" SortMemberPath="Mfg" Width="88"
+                                                        ElementStyle="{StaticResource MfgCell}"/>
                                     <DataGridTextColumn Header="EXP" Binding="{Binding Exp}" SortMemberPath="Exp" Width="88"/>
-                                    <DataGridTextColumn Header="QTY" Binding="{Binding Qty}" SortMemberPath="Qty"
-                                                        Width="48" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="UPN" Binding="{Binding Upn}" SortMemberPath="Upn" Width="100"/>
-                                    <DataGridTextColumn Header="Count" Binding="{Binding Count}" SortMemberPath="Count"
-                                                        Width="52" ElementStyle="{StaticResource RightCell}"/>
                                 </DataGrid.Columns>
                             </DataGrid>
 
@@ -249,16 +265,15 @@
                                     <DataGridTextColumn Header="No." Binding="{Binding No}" SortMemberPath="No"
                                                         Width="44" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="Time" Binding="{Binding TimeText}" SortMemberPath="TimeText" Width="72"/>
-                                    <DataGridTextColumn Header="UDI" Binding="{Binding Udi}" SortMemberPath="Udi" Width="150"/>
+                                    <DataGridTextColumn Header="UDI" Binding="{Binding Udi}" SortMemberPath="Udi" Width="450"/>
                                     <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" SortMemberPath="Gtin" Width="120"/>
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
                                     <DataGridTextColumn x:Name="MultiLotSnColumn" Header="SN" Binding="{Binding Sn}"
                                                         CanUserSort="False" Width="*" MinWidth="230"/>
-                                    <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" SortMemberPath="Mfg" Width="88"/>
+                                    <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" SortMemberPath="Mfg" Width="88"
+                                                        ElementStyle="{StaticResource MfgCell}"/>
                                     <DataGridTextColumn Header="EXP" Binding="{Binding Exp}" SortMemberPath="Exp" Width="88"/>
-                                    <DataGridTextColumn Header="QTY" Binding="{Binding Qty}" SortMemberPath="Qty"
-                                                        Width="48" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="UPN" Binding="{Binding Upn}" SortMemberPath="Upn" Width="100"/>
                                 </DataGrid.Columns>
                             </DataGrid>

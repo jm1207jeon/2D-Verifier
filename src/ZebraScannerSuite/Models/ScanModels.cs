@@ -36,7 +36,7 @@ public class ScanListRow
     public string GroupBrush { get; set; } = "#00FFFFFF";
 }
 
-/// <summary>멀티 스캔 세로 모드 행: 고유 코드당 1행, 중복 스캔은 Count만 증가</summary>
+/// <summary>멀티 스캔 세로 모드 행: 고유 코드당 1행 (중복 스캔은 행 추가 없이 내부 Count만 증가)</summary>
 public class MultiScanRow
 {
     public int No { get; set; }
@@ -44,16 +44,19 @@ public class MultiScanRow
     public string Gtin { get; set; } = "";
     public string Lot { get; set; } = "";
     public string Mfg { get; set; } = "";
+    /// <summary>MFG가 EXP에서 역산된 값인지 (파란색 표시용)</summary>
+    public bool MfgComputed { get; set; }
     public string Exp { get; set; } = "";
     public string Pn { get; set; } = "";
     public string Sn { get; set; } = "";
-    public string Qty { get; set; } = "";
     public string Upn { get; set; } = "";
     public string Raw { get; set; } = "";
     public int Count { get; set; } = 1;
+    /// <summary>정렬 시 같은 값끼리 묶어 보여주는 배경색 (미정렬 시 투명)</summary>
+    public string GroupBrush { get; set; } = "#00FFFFFF";
 }
 
-/// <summary>멀티 스캔 가로 모드 행: LOT당 1행, 시리얼은 Sn에 콤마로 누적</summary>
+/// <summary>멀티 스캔 가로 모드 행: LOT당 1행, 시리얼은 Sn에 오름차순 콤마로 누적</summary>
 public class MultiLotRow
 {
     public int No { get; set; }
@@ -65,8 +68,9 @@ public class MultiLotRow
     public List<string> Serials { get; } = new();
     public string Sn { get; set; } = "";
     public string Mfg { get; set; } = "";
+    /// <summary>MFG가 EXP에서 역산된 값인지 (파란색 표시용)</summary>
+    public bool MfgComputed { get; set; }
     public string Exp { get; set; } = "";
-    public string Qty { get; set; } = "";
     public string Upn { get; set; } = "";
 }
 
