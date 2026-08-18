@@ -56,7 +56,15 @@ public class MultiScanRow
     public string GroupBrush { get; set; } = "#00FFFFFF";
 }
 
-/// <summary>멀티 스캔 가로 모드 행: LOT당 1행, 시리얼은 Sn에 오름차순 콤마로 누적</summary>
+/// <summary>가로 모드 SN 고정 슬롯(1~15): 스캔 전 연한 회색, 스캔되면 검정으로 표시</summary>
+public class SnSlot
+{
+    public int Num { get; set; }
+    public bool Scanned { get; set; }
+}
+
+/// <summary>멀티 스캔 가로 모드 행: LOT당 1행.
+/// SN은 1~15 고정 위치 슬롯으로 표시(스캔된 번호만 검정), Sn 문자열은 CSV용 실제 시리얼 목록.</summary>
 public class MultiLotRow
 {
     public int No { get; set; }
@@ -66,7 +74,14 @@ public class MultiLotRow
     public string Pn { get; set; } = "";
     public string Lot { get; set; } = "";
     public List<string> Serials { get; } = new();
+    /// <summary>CSV 내보내기용 실제 시리얼 목록 (오름차순 콤마)</summary>
     public string Sn { get; set; } = "";
+    /// <summary>SN 고정 슬롯 1~15 (화면 표시용)</summary>
+    public List<SnSlot> Slots { get; } = Enumerable.Range(1, 15).Select(n => new SnSlot { Num = n }).ToList();
+    /// <summary>1~15 범위 밖 시리얼 (슬롯 우측에 별도 표시)</summary>
+    public string SnExtra { get; set; } = "";
+    /// <summary>해당 로트의 스캔된 총 수량 (시리얼 개수)</summary>
+    public string Qty { get; set; } = "";
     public string Mfg { get; set; } = "";
     /// <summary>MFG가 EXP에서 역산된 값인지 (파란색 표시용)</summary>
     public bool MfgComputed { get; set; }

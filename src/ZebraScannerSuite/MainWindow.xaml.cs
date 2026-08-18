@@ -919,6 +919,22 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>가로 모드 행에 시리얼 반영: 실제 목록(Sn, CSV용)과 1~15 고정 슬롯(화면용),
+    /// 총 수량(QTY)을 함께 갱신한다. 1~15 밖 시리얼은 SnExtra에 별도 누적.</summary>
+    private static void MarkLotSerial(MultiLotRow row, string sn)
+    {
+        row.Serials.Add(sn);
+        row.Serials.Sort((a, c) =>
+            int.TryParse(a, out int x) && int.TryParse(c, out int y)
+                ? x.CompareTo(y) : string.CompareOrdinal(a, c));
+        row.Sn = string.Join(", ", row.Serials);
+        row.Qty = row.Serials.Count.ToString();
+        if (int.TryParse(sn, out int n) && n >= 1 && n <= 15)
+            row.Slots[n - 1].Scanned = true;
+        else
+            row.SnExtra = row.SnExtra.Length == 0 ? sn : row.SnExtra + ", " + sn;
+    }
+
     /// <summary>MFG 미기재 라벨의 제조일 역산: 엑셀 EDATE(EXP,-36)+1 (유효기간 36개월 가정).
     /// exp는 "yyyy-MM-dd" 또는 "yyyy-MM"(일자 00) 형식.</summary>
     private static bool TryComputeMfgFromExp(string exp, out string mfg)
@@ -990,18 +1006,13 @@ public partial class MainWindow : Window
                 System.Media.SystemSounds.Beep.Play(); // 일반(HID) 스캐너: PC 비프로 대체
         }
 
-        // ---- 가로 모드(파생 뷰): LOT당 1행, 시리얼은 SN 셀에 오름차순 콤마 누적 ----
+        // ---- 가로 모드(파생 뷰): LOT당 1행, SN은 1~15 고정 슬롯 + QTY(총 수량) ----
         string lotKey = lot.Length > 0 ? lot : "@" + b.Text; // LOT 없는 코드는 코드별 행
         if (_multiLotSeen.TryGetValue(lotKey, out var lrow))
         {
             if (isNewCode && sn.Length > 0 && !lrow.Serials.Contains(sn))
             {
-                lrow.Serials.Add(sn);
-                // 1번이 좌측부터 오도록 숫자 오름차순 정렬 (숫자가 아니면 문자열 비교)
-                lrow.Serials.Sort((a, c) =>
-                    int.TryParse(a, out int x) && int.TryParse(c, out int y)
-                        ? x.CompareTo(y) : string.CompareOrdinal(a, c));
-                lrow.Sn = string.Join(", ", lrow.Serials);
+                MarkLotSerial(lrow, sn);
                 MultiLotGrid.Items.Refresh();
                 MultiLotGrid.ScrollIntoView(lrow);
                 FlashRow(MultiLotGrid, lrow);
@@ -1028,7 +1039,7 @@ public partial class MainWindow : Window
                 Exp = exp,
                 Upn = upn,
             };
-            if (sn.Length > 0) { lrow.Serials.Add(sn); lrow.Sn = sn; }
+            if (sn.Length > 0) MarkLotSerial(lrow, sn);
             _multiLotSeen[lotKey] = lrow;
             _multiLotRows.Add(lrow);
             MultiLotGrid.ScrollIntoView(lrow);
@@ -1168,13 +1179,17 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>특정 셀을 행 하이라이트보다 진하게 강조 (가로 모드에서 시리얼 추가 시 SN 셀)</summary>
+    /// <summary>특정 셀을 행 하이라이트보다 진하게 강조 (가로 모드에서 시리얼 추가 시 SN 셀).
+    /// 템플릿 컬럼은 셀 내용의 부모가 ContentPresenter이므로 비주얼 트리를 거슬러 셀을 찾는다.</summary>
     private static void FlashCell(System.Windows.Controls.DataGrid grid, object row, DataGridColumn col)
     {
         grid.UpdateLayout();
         if (grid.ItemContainerGenerator.ContainerFromItem(row) is not System.Windows.Controls.DataGridRow dgr)
             return;
-        if (col.GetCellContent(dgr)?.Parent is not System.Windows.Controls.DataGridCell cell)
+        DependencyObject? node = col.GetCellContent(dgr);
+        while (node != null && node is not System.Windows.Controls.DataGridCell)
+            node = System.Windows.Media.VisualTreeHelper.GetParent(node);
+        if (node is not System.Windows.Controls.DataGridCell cell)
             return;
         var brush = new System.Windows.Media.SolidColorBrush(
             System.Windows.Media.Color.FromArgb(170, 255, 152, 0)); // 진한 주황
@@ -1205,11 +1220,11 @@ public partial class MainWindow : Window
         var sb = new StringBuilder();
         if (horiz)
         {
-            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,MFG,EXP,UPN");
+            sb.AppendLine("No,Time,UDI,GTIN,PN,LOT,SN,QTY,MFG,EXP,UPN");
             var view = System.Windows.Data.CollectionViewSource.GetDefaultView(MultiLotGrid.ItemsSource);
             foreach (var o in view)
                 if (o is MultiLotRow r)
-                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Udi)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Upn)}");
+                    sb.AppendLine($"{r.No},{r.TimeText},{CsvText(r.Udi)},{CsvText(r.Gtin)},{CsvText(r.Pn)},{CsvText(r.Lot)},{CsvText(r.Sn)},{Csv(r.Qty)},{Csv(r.Mfg)},{Csv(r.Exp)},{CsvText(r.Upn)}");
         }
         else
         {

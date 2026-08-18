@@ -269,8 +269,44 @@
                                     <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" SortMemberPath="Gtin" Width="120"/>
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
-                                    <DataGridTextColumn x:Name="MultiLotSnColumn" Header="SN" Binding="{Binding Sn}"
-                                                        CanUserSort="False" Width="*" MinWidth="230"/>
+                                    <DataGridTemplateColumn x:Name="MultiLotSnColumn" Header="SN"
+                                                            CanUserSort="False" Width="*" MinWidth="350">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <!-- 1~15 고정 위치 슬롯: 스캔 전 연회색, 스캔되면 검정 굵게 -->
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <ItemsControl ItemsSource="{Binding Slots}">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <StackPanel Orientation="Horizontal"/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Num}" Width="22" TextAlignment="Center">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="#FFC8C8C8"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Scanned}" Value="True">
+                                                                                    <Setter Property="Foreground" Value="Black"/>
+                                                                                    <Setter Property="FontWeight" Value="Bold"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    <!-- 1~15 범위 밖 시리얼은 우측에 별도 표기 -->
+                                                    <TextBlock Text="{Binding SnExtra}" Margin="6,0,0,0" FontWeight="Bold"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="QTY" Binding="{Binding Qty}" SortMemberPath="Qty"
+                                                        Width="48" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" SortMemberPath="Mfg" Width="88"
                                                         ElementStyle="{StaticResource MfgCell}"/>
                                     <DataGridTextColumn Header="EXP" Binding="{Binding Exp}" SortMemberPath="Exp" Width="88"/>
