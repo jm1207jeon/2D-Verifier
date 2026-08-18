@@ -54,6 +54,9 @@ public class AppSettings
     /// <summary>멀티 스캔 보기 모드: 0=세로(스캔당 1행), 1=가로(LOT당 1행, SN 콤마 누적)</summary>
     public int MultiViewMode { get; set; }
 
+    /// <summary>멀티 스캔 UDI(원문) 컬럼 표시 여부 (기본 숨김)</summary>
+    public bool ShowUdiColumn { get; set; }
+
     /// <summary>멀티 스캔 세로 모드 컬럼 폭 (사용자 조절값, 재실행 시 복원)</summary>
     public List<double> MultiColWidthsV { get; set; } = new();
 

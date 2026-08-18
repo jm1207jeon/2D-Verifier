@@ -56,12 +56,11 @@ public class MultiScanRow
     public string GroupBrush { get; set; } = "#00FFFFFF";
 }
 
-/// <summary>가로 모드 SN 고정 슬롯(0~15): 스캔 전 연한 회색, 스캔되면 검정으로 표시.
-/// Display는 "숫자," 형태(마지막 슬롯은 콤마 없음)로, 숫자와 바로 옆 콤마가 함께 활성화된다.</summary>
+/// <summary>가로 모드 SN 고정 슬롯(1~15): 15등분 셀 - 스캔 전 회색 숫자,
+/// 스캔되면 셀 전체가 연한 녹색으로 채워지고 숫자는 검정으로 표시.</summary>
 public class SnSlot
 {
     public int Num { get; set; }
-    public string Display { get; set; } = "";
     public bool Scanned { get; set; }
 }
 
@@ -78,10 +77,10 @@ public class MultiLotRow
     public List<string> Serials { get; } = new();
     /// <summary>CSV 내보내기용 실제 시리얼 목록 (오름차순 콤마)</summary>
     public string Sn { get; set; } = "";
-    /// <summary>SN 고정 슬롯 0~15 (화면 표시용, 0이 가장 왼쪽)</summary>
-    public List<SnSlot> Slots { get; } = Enumerable.Range(0, 16)
-        .Select(n => new SnSlot { Num = n, Display = n == 15 ? "15" : n + "," }).ToList();
-    /// <summary>0~15 범위 밖 시리얼 (슬롯 우측에 별도 표시)</summary>
+    /// <summary>SN 고정 슬롯 1~15 (화면 표시용, 15등분 셀)</summary>
+    public List<SnSlot> Slots { get; } = Enumerable.Range(1, 15)
+        .Select(n => new SnSlot { Num = n }).ToList();
+    /// <summary>1~15 범위 밖 시리얼 (슬롯 우측에 별도 표시)</summary>
     public string SnExtra { get; set; } = "";
     /// <summary>해당 로트의 스캔된 총 수량 (시리얼 개수)</summary>
     public string Qty { get; set; } = "";

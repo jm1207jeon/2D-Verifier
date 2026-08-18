@@ -202,7 +202,11 @@
                                      ToolTip="스캔 1건 = 1행 (고유 코드별, 중복은 Count 증가)"/>
                         <RadioButton x:Name="MultiViewHorizontal" Content="가로 모드"
                                      VerticalAlignment="Center" Checked="MultiView_Changed"
-                                     ToolTip="LOT당 1행, 시리얼은 SN 셀에 콤마로 누적 (최종 정리용)"/>
+                                     ToolTip="LOT당 1행, 시리얼은 SN 슬롯에 표시 (최종 정리용)"/>
+                        <Separator Width="16" Visibility="Hidden"/>
+                        <CheckBox x:Name="MultiUdiCheck" Content="UDI 표시" VerticalAlignment="Center"
+                                  Checked="MultiUdi_Changed" Unchecked="MultiUdi_Changed"
+                                  ToolTip="체크하면 목록에 UDI(바코드 원문) 컬럼을 표시합니다 (기본 숨김)"/>
                     </WrapPanel>
 
                     <DockPanel Grid.Row="1" Margin="4,4">
@@ -242,7 +246,8 @@
                                     <DataGridTextColumn Header="No." Binding="{Binding No}" SortMemberPath="No"
                                                         Width="44" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="Time" Binding="{Binding TimeText}" SortMemberPath="TimeText" Width="72"/>
-                                    <DataGridTextColumn Header="UDI" Binding="{Binding Raw}" SortMemberPath="Raw" Width="450"/>
+                                    <DataGridTextColumn x:Name="MultiUdiColumn" Header="UDI" Binding="{Binding Raw}"
+                                                        SortMemberPath="Raw" Width="450" Visibility="Collapsed"/>
                                     <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" SortMemberPath="Gtin" Width="120"/>
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
@@ -265,43 +270,57 @@
                                     <DataGridTextColumn Header="No." Binding="{Binding No}" SortMemberPath="No"
                                                         Width="44" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="Time" Binding="{Binding TimeText}" SortMemberPath="TimeText" Width="72"/>
-                                    <DataGridTextColumn Header="UDI" Binding="{Binding Udi}" SortMemberPath="Udi" Width="450"/>
+                                    <DataGridTextColumn x:Name="MultiLotUdiColumn" Header="UDI" Binding="{Binding Udi}"
+                                                        SortMemberPath="Udi" Width="450" Visibility="Collapsed"/>
                                     <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" SortMemberPath="Gtin" Width="120"/>
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
                                     <DataGridTemplateColumn x:Name="MultiLotSnColumn" Header="SN"
-                                                            CanUserSort="False" Width="*" MinWidth="440">
+                                                            CanUserSort="False" Width="*" MinWidth="330">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <!-- 1~15 고정 위치 슬롯: 스캔 전 연회색, 스캔되면 검정 굵게 -->
-                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <ItemsControl ItemsSource="{Binding Slots}">
+                                                <!-- SN 결과란을 15등분 (안쪽 테두리 없음):
+                                                     스캔된 번호의 칸 전체가 연한 녹색으로 채워짐 -->
+                                                <DockPanel LastChildFill="True">
+                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding SnExtra}"
+                                                               Margin="6,0,2,0" VerticalAlignment="Center"/>
+                                                    <ItemsControl ItemsSource="{Binding Slots}" HorizontalAlignment="Stretch">
                                                         <ItemsControl.ItemsPanel>
                                                             <ItemsPanelTemplate>
-                                                                <StackPanel Orientation="Horizontal"/>
+                                                                <UniformGrid Rows="1" Columns="15"/>
                                                             </ItemsPanelTemplate>
                                                         </ItemsControl.ItemsPanel>
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
-                                                                <!-- "숫자," 를 한 단위로: 스캔 시 숫자와 옆 콤마가 함께 검정으로 -->
-                                                                <TextBlock Text="{Binding Display}" Width="26" TextAlignment="Left">
-                                                                    <TextBlock.Style>
-                                                                        <Style TargetType="TextBlock">
-                                                                            <Setter Property="Foreground" Value="#FFC8C8C8"/>
+                                                                <Border>
+                                                                    <Border.Style>
+                                                                        <Style TargetType="Border">
+                                                                            <Setter Property="Background" Value="Transparent"/>
                                                                             <Style.Triggers>
                                                                                 <DataTrigger Binding="{Binding Scanned}" Value="True">
-                                                                                    <Setter Property="Foreground" Value="Black"/>
+                                                                                    <Setter Property="Background" Value="#FFD7EFD7"/>
                                                                                 </DataTrigger>
                                                                             </Style.Triggers>
                                                                         </Style>
-                                                                    </TextBlock.Style>
-                                                                </TextBlock>
+                                                                    </Border.Style>
+                                                                    <TextBlock Text="{Binding Num}" HorizontalAlignment="Center"
+                                                                               VerticalAlignment="Center">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Foreground" Value="#FFC8C8C8"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding Scanned}" Value="True">
+                                                                                        <Setter Property="Foreground" Value="Black"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                </Border>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>
-                                                    <!-- 1~15 범위 밖 시리얼은 우측에 별도 표기 -->
-                                                    <TextBlock Text="{Binding SnExtra}" Margin="6,0,0,0" FontWeight="Bold"/>
-                                                </StackPanel>
+                                                </DockPanel>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>

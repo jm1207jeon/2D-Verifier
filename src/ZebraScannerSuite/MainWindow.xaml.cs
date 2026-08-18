@@ -208,12 +208,29 @@ public partial class MainWindow : Window
         ModeBarcodeOnly.IsChecked = _settings.ScanMode == 0;
         ModeBarcodeImage.IsChecked = _settings.ScanMode >= 1;
 
-        // 멀티 탭 보기 모드 + 사용자 컬럼 폭 복원
+        // 멀티 탭 보기 모드 + UDI 컬럼 표시 + 사용자 컬럼 폭 복원
         MultiViewVertical.IsChecked = _settings.MultiViewMode == 0;
         MultiViewHorizontal.IsChecked = _settings.MultiViewMode == 1;
+        MultiUdiCheck.IsChecked = _settings.ShowUdiColumn;
         ApplyMultiViewVisibility();
+        ApplyUdiColumnVisibility();
         ApplyColWidths(MultiGrid, _settings.MultiColWidthsV);
         ApplyColWidths(MultiLotGrid, _settings.MultiColWidthsH);
+    }
+
+    /// <summary>UDI(원문) 컬럼 표시/숨김 - 기본 숨김, 옵션 체크 시 두 보기 모두에 표시</summary>
+    private void ApplyUdiColumnVisibility()
+    {
+        var vis = MultiUdiCheck.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        MultiUdiColumn.Visibility = vis;
+        MultiLotUdiColumn.Visibility = vis;
+    }
+
+    private void MultiUdi_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        ApplyUdiColumnVisibility();
+        AutoSaveSettings();
     }
 
     private void CollectSettingsFromUi()
@@ -227,12 +244,23 @@ public partial class MainWindow : Window
         _settings.IgnoreDuplicates = DupIgnoreCheck.IsChecked == true;
         _settings.ScanMode = CurrentMode;
         _settings.MultiViewMode = MultiViewHorizontal.IsChecked == true ? 1 : 0;
+        _settings.ShowUdiColumn = MultiUdiCheck.IsChecked == true;
 
-        // 사용자가 조절한 컬럼 폭 저장 (레이아웃 전이라 폭이 0이면 기존 값 유지)
-        var wv = MultiGrid.Columns.Select(c => c.ActualWidth).ToList();
-        if (wv.Count > 0 && wv.All(w => w > 0)) _settings.MultiColWidthsV = wv;
-        var wh = MultiLotGrid.Columns.Select(c => c.ActualWidth).ToList();
-        if (wh.Count > 0 && wh.All(w => w > 0)) _settings.MultiColWidthsH = wh;
+        // 사용자가 조절한 컬럼 폭 저장 - 숨김/미배치 컬럼(폭 0)은 기존 저장값을 유지
+        _settings.MultiColWidthsV = MergeColWidths(MultiGrid, _settings.MultiColWidthsV);
+        _settings.MultiColWidthsH = MergeColWidths(MultiLotGrid, _settings.MultiColWidthsH);
+    }
+
+    private static List<double> MergeColWidths(System.Windows.Controls.DataGrid grid, List<double> previous)
+    {
+        var result = new List<double>(grid.Columns.Count);
+        for (int i = 0; i < grid.Columns.Count; i++)
+        {
+            double w = grid.Columns[i].ActualWidth;
+            if (w <= 0 && previous.Count == grid.Columns.Count) w = previous[i];
+            result.Add(w);
+        }
+        return result;
     }
 
     /// <summary>저장된 컬럼 폭 복원 (컬럼 수가 바뀐 구버전 설정은 무시)</summary>
@@ -929,8 +957,8 @@ public partial class MainWindow : Window
                 ? x.CompareTo(y) : string.CompareOrdinal(a, c));
         row.Sn = string.Join(", ", row.Serials);
         row.Qty = row.Serials.Count.ToString();
-        if (int.TryParse(sn, out int n) && n >= 0 && n <= 15)
-            row.Slots[n].Scanned = true; // 슬롯이 0부터 시작하므로 번호=인덱스
+        if (int.TryParse(sn, out int n) && n >= 1 && n <= 15)
+            row.Slots[n - 1].Scanned = true;
         else
             row.SnExtra = row.SnExtra.Length == 0 ? sn : row.SnExtra + ", " + sn;
     }
