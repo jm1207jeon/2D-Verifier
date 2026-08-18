@@ -929,8 +929,8 @@ public partial class MainWindow : Window
                 ? x.CompareTo(y) : string.CompareOrdinal(a, c));
         row.Sn = string.Join(", ", row.Serials);
         row.Qty = row.Serials.Count.ToString();
-        if (int.TryParse(sn, out int n) && n >= 1 && n <= 15)
-            row.Slots[n - 1].Scanned = true;
+        if (int.TryParse(sn, out int n) && n >= 0 && n <= 15)
+            row.Slots[n].Scanned = true; // 슬롯이 0부터 시작하므로 번호=인덱스
         else
             row.SnExtra = row.SnExtra.Length == 0 ? sn : row.SnExtra + ", " + sn;
     }

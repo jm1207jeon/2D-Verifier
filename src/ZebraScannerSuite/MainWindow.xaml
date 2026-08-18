@@ -270,7 +270,7 @@
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
                                     <DataGridTemplateColumn x:Name="MultiLotSnColumn" Header="SN"
-                                                            CanUserSort="False" Width="*" MinWidth="350">
+                                                            CanUserSort="False" Width="*" MinWidth="440">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <!-- 1~15 고정 위치 슬롯: 스캔 전 연회색, 스캔되면 검정 굵게 -->
@@ -283,14 +283,14 @@
                                                         </ItemsControl.ItemsPanel>
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
-                                                                <TextBlock Text="{Binding Num}" Width="22" TextAlignment="Center">
+                                                                <!-- "숫자," 를 한 단위로: 스캔 시 숫자와 옆 콤마가 함께 검정으로 -->
+                                                                <TextBlock Text="{Binding Display}" Width="26" TextAlignment="Left">
                                                                     <TextBlock.Style>
                                                                         <Style TargetType="TextBlock">
                                                                             <Setter Property="Foreground" Value="#FFC8C8C8"/>
                                                                             <Style.Triggers>
                                                                                 <DataTrigger Binding="{Binding Scanned}" Value="True">
                                                                                     <Setter Property="Foreground" Value="Black"/>
-                                                                                    <Setter Property="FontWeight" Value="Bold"/>
                                                                                 </DataTrigger>
                                                                             </Style.Triggers>
                                                                         </Style>
