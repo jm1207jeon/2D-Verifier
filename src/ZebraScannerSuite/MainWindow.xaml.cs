@@ -42,10 +42,6 @@ public partial class MainWindow : Window
     private DateTime _kbdScanLast = DateTime.MinValue;
     private const int KbdScanGapMs = 80; // 스캐너 타이핑 문자 간격 상한 (사람 타이핑과 구분)
 
-    // 실시간 스캔 속도 표시 (최근 60초 스캔 시각 기록)
-    private readonly Queue<DateTime> _scanTimes = new();
-    private readonly DispatcherTimer _scanRateTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-
     // 키보드 에뮬레이터(Caps Lock 토글 원인) 재비활성화 주기 제한
     private DateTime _lastKbdEmuOff = DateTime.MinValue;
 
@@ -81,29 +77,6 @@ public partial class MainWindow : Window
         MultiLotGrid.ItemsSource = _multiLotRows;
         _imageTimeout.Tick += ImageTimeout_Tick;
         _scannerWatchdog.Tick += ScannerWatchdog_Tick;
-        _scanRateTimer.Tick += ScanRateTimer_Tick;
-        _scanRateTimer.Start();
-    }
-
-    private void RecordScanRate()
-    {
-        _scanTimes.Enqueue(DateTime.Now);
-        while (_scanTimes.Count > 0 && (DateTime.Now - _scanTimes.Peek()).TotalSeconds > 60)
-            _scanTimes.Dequeue();
-    }
-
-    /// <summary>1초마다 최근 스캔 간격 평균으로 분당 스캔 속도를 갱신 (1초당 1회 = 60 Unit/Min)</summary>
-    private void ScanRateTimer_Tick(object? sender, EventArgs e)
-    {
-        while (_scanTimes.Count > 0 && (DateTime.Now - _scanTimes.Peek()).TotalSeconds > 60)
-            _scanTimes.Dequeue();
-        double rate = 0;
-        if (_scanTimes.Count >= 2 && (DateTime.Now - _scanTimes.Last()).TotalSeconds <= 10)
-        {
-            double span = (_scanTimes.Last() - _scanTimes.Peek()).TotalSeconds;
-            if (span > 0) rate = (_scanTimes.Count - 1) / span * 60.0;
-        }
-        ScanRateText.Text = $"스캔 속도 {rate:0} Unit/Min";
     }
 
     /// <summary>10초마다 연결 상태 점검: 연동 실패 시 재시도, 목록이 비면 재검색.
@@ -190,6 +163,15 @@ public partial class MainWindow : Window
                 if (_multiActive) _scanner.SetBeepAfterGoodDecode(s.Id, true);
                 // 촬영 모드로 남겨두면 다음 실행/다른 프로그램에서 스캔이 안 되므로 디코드 모드로 복원
                 _scanner.SetCaptureBarcodeMode(s.Id);
+
+                // 종료 시 스캐너를 일반 키보드 스캐너 상태로 완전 복원:
+                // - 드라이버 키보드 에뮬레이터 원복 (실행 중에만 껐던 설정)
+                // - SNAPI였다면 USB HID 키보드 모드로 영구 전환해 저장 상태 자체를 키보드 스캐너로.
+                //   (구버전이 영구 SNAPI로 남긴 스캐너도 이 종료 처리 한 번으로 정상화됨)
+                //   다음 실행 시 앱이 다시 임시(비영구)로 SNAPI 전환한다.
+                _scanner.SetKeyboardEmulator(true);
+                if (s.Type.Contains("SNAPI", StringComparison.OrdinalIgnoreCase))
+                    _scanner.SwitchHostMode(s.Id, "XUA-45001-3", permanent: true); // USB HID 키보드
             }
             _scanner?.Dispose();
         }
@@ -547,7 +529,9 @@ public partial class MainWindow : Window
                         _lastHostSwitch = DateTime.Now;
                         Dispatcher.BeginInvoke(() => SetStatus(
                             $"{reason}: 스캐너를 SNAPI(이미징) 모드로 자동 전환 중... 재부팅 후 자동 재연결됩니다."));
-                        bool switched = _scanner.SwitchHostMode(dev.Id, _settings.PreferredHostMode, permanent: true);
+                        // 실행 중에만 SNAPI 사용: permanent=false → 스캐너 저장 설정은 바꾸지 않으므로
+                        // 앱이 비정상 종료되어도 전원 재인가(케이블 재연결)만 하면 원래 모드로 복귀한다.
+                        bool switched = _scanner.SwitchHostMode(dev.Id, _settings.PreferredHostMode, permanent: false);
                         if (switched) return; // 재부팅 → PnP 재연결 이벤트가 다음 EnsureScannerMode를 부름
                         // 전환 명령 자체가 실패 - 20초 쿨다운 후 워치독이 자동 재시도하도록 남겨두고 계속 진행
                         Dispatcher.BeginInvoke(() => SetStatus(
@@ -976,11 +960,14 @@ public partial class MainWindow : Window
         return true;
     }
 
+    /// <summary>멀티 스캔 중복 판정 키: LOT+SN이 있으면 그 조합(제품 1개 = 1키),
+    /// 없으면 스캔 원문. CSV 불러오기로 복원한 항목과 새 스캔의 중복 판정에도 동일 적용.</summary>
+    private static string MakeMultiKey(string udi, string lot, string sn) =>
+        lot.Length > 0 && sn.Length > 0 ? lot + "|" + sn : udi;
+
     private void AddMultiScan(BarcodeData b)
     {
         _multiTotal++;
-        RecordScanRate();
-        string key = b.Text; // 중복 판정은 스캔값 기준 (수신 경로가 달라도 같은 라벨은 1행)
 
         var ai = Gs1Parser.Parse(b.Text);
         string lot = ai.GetValueOrDefault("10", "");
@@ -999,6 +986,7 @@ public partial class MainWindow : Window
         }
 
         // ---- 세로 모드(마스터 데이터): 고유 코드당 1행, 중복은 행 추가 없이 하이라이트만 ----
+        string key = MakeMultiKey(b.Text, lot, sn);
         bool isNewCode = !_multiSeen.TryGetValue(key, out var row);
         if (!isNewCode)
         {
@@ -1074,6 +1062,11 @@ public partial class MainWindow : Window
             FlashRow(MultiLotGrid, lrow);
         }
 
+        UpdateMultiCountTexts();
+    }
+
+    private void UpdateMultiCountTexts()
+    {
         MultiTotalText.Text = _multiTotal.ToString();
         BigCountText.Text = _multiSeen.Count.ToString();
         // 총 배치 수 = 중복 없는 고유 LOT 개수 (LOT 없는 코드의 행은 제외)
@@ -1230,6 +1223,149 @@ public partial class MainWindow : Window
         };
         anim.Completed += (_, _) => cell.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
         brush.BeginAnimation(System.Windows.Media.SolidColorBrush.ColorProperty, anim);
+    }
+
+    /// <summary>CSV 불러오기: 이전에 내보낸 목록을 복원해 이어서 검사한다.
+    /// 불러온 항목은 중복 판정(LOT+SN)에 포함되어, 이미 스캔했던 제품을 다시 찍으면
+    /// 새 행이 생기지 않고 기존 행 하이라이트만 된다. 세로/가로 CSV 모두 지원.</summary>
+    private void MultiImport_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "CSV 불러오기",
+            Filter = "CSV 파일|*.csv",
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        try
+        {
+            var lines = File.ReadAllLines(dlg.FileName, new UTF8Encoding(false));
+            if (lines.Length < 2) { SetStatus("CSV 불러오기: 데이터가 없습니다."); return; }
+
+            // 헤더에서 컬럼 위치 파악 (세로/가로 CSV, 엑셀 재저장본 모두 허용)
+            var header = ParseCsvLine(lines[0]).Select(h => UnwrapCsvField(h).Trim().ToUpperInvariant()).ToList();
+            int iUdi = header.IndexOf("UDI"), iGtin = header.IndexOf("GTIN"), iPn = header.IndexOf("PN");
+            int iLot = header.IndexOf("LOT"), iSn = header.IndexOf("SN"), iMfg = header.IndexOf("MFG");
+            int iExp = header.IndexOf("EXP"), iUpn = header.IndexOf("UPN"), iTime = header.IndexOf("TIME");
+            if (iLot < 0 || iSn < 0)
+            {
+                SetStatus("CSV 불러오기 실패: LOT/SN 컬럼을 찾을 수 없습니다 (이 프로그램에서 내보낸 CSV를 사용하세요).");
+                return;
+            }
+
+            static string Field(List<string> f, int i) => i >= 0 && i < f.Count ? UnwrapCsvField(f[i]) : "";
+
+            int imported = 0, skipped = 0;
+            for (int li = 1; li < lines.Length; li++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[li])) continue;
+                var f = ParseCsvLine(lines[li]);
+                string lot = Field(f, iLot);
+                string udi = Field(f, iUdi);
+                // 가로 CSV는 SN 셀에 여러 시리얼이 콤마로 들어있음 → 시리얼별 1건으로 복원
+                var serials = Field(f, iSn).Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToList();
+                if (serials.Count == 0) serials.Add("");
+                foreach (string sn in serials)
+                {
+                    if (ImportUnit(udi, Field(f, iGtin), Field(f, iPn), lot, sn,
+                                   Field(f, iMfg), Field(f, iExp), Field(f, iUpn), Field(f, iTime)))
+                        imported++;
+                    else
+                        skipped++;
+                }
+            }
+
+            MultiGrid.Items.Refresh();
+            MultiLotGrid.Items.Refresh();
+            if (_multiSortV.Count > 0) UpdateVerticalGrouping();
+            UpdateMultiCountTexts();
+            SetStatus($"CSV 불러오기 완료: {imported}건 복원" + (skipped > 0 ? $" (중복 {skipped}건 제외)" : "") +
+                      " - 이어서 스캔하면 불러온 항목과의 중복이 자동 제외됩니다.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("CSV 불러오기 실패: " + ex.Message);
+        }
+    }
+
+    /// <summary>CSV의 1개 제품(시리얼 단위)을 목록에 복원. 이미 있으면 false.</summary>
+    private bool ImportUnit(string udi, string gtin, string pn, string lot, string sn,
+                            string mfg, string exp, string upn, string time)
+    {
+        string key = MakeMultiKey(udi.Length > 0 ? udi : $"{lot}|{sn}", lot, sn);
+        if (_multiSeen.ContainsKey(key)) return false;
+
+        bool mfgComputed = false;
+        if (mfg.Length == 0 && TryComputeMfgFromExp(exp, out string computed))
+        {
+            mfg = computed;
+            mfgComputed = true;
+        }
+
+        var row = new MultiScanRow
+        {
+            No = _multiRows.Count + 1,
+            TimeText = time.Length > 0 ? time : "(가져옴)",
+            Gtin = gtin, Lot = lot, Mfg = mfg, MfgComputed = mfgComputed,
+            Exp = exp, Pn = pn, Sn = sn, Upn = upn.Length > 0 ? upn : "-", Raw = udi,
+        };
+        _multiSeen[key] = row;
+        _multiRows.Add(row);
+        _multiTotal++;
+
+        string lotKey = lot.Length > 0 ? lot : "@" + (udi.Length > 0 ? udi : key);
+        if (!_multiLotSeen.TryGetValue(lotKey, out var lrow))
+        {
+            lrow = new MultiLotRow
+            {
+                No = _multiLotRows.Count + 1,
+                TimeText = row.TimeText,
+                Udi = udi, Gtin = gtin, Pn = pn, Lot = lot,
+                Mfg = mfg, MfgComputed = mfgComputed, Exp = exp,
+                Upn = row.Upn,
+            };
+            _multiLotSeen[lotKey] = lrow;
+            _multiLotRows.Add(lrow);
+        }
+        if (sn.Length > 0 && !lrow.Serials.Contains(sn)) MarkLotSerial(lrow, sn);
+        return true;
+    }
+
+    /// <summary>CSV 한 줄 분해 (따옴표 필드, "" 이스케이프 지원)</summary>
+    private static List<string> ParseCsvLine(string line)
+    {
+        var fields = new List<string>();
+        var sb = new StringBuilder();
+        bool inQuotes = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
+                    else inQuotes = false;
+                }
+                else sb.Append(c);
+            }
+            else if (c == '"') inQuotes = true;
+            else if (c == ',') { fields.Add(sb.ToString()); sb.Clear(); }
+            else sb.Append(c);
+        }
+        fields.Add(sb.ToString());
+        return fields;
+    }
+
+    /// <summary>엑셀 텍스트 보호용 ="값" 래핑 제거 (엑셀에서 재저장한 일반 값도 그대로 통과)</summary>
+    private static string UnwrapCsvField(string f)
+    {
+        f = f.Trim();
+        if (f.StartsWith("=\"") && f.EndsWith("\"") && f.Length >= 3)
+            f = f[2..^1];
+        else if (f.StartsWith('=') && f.Length > 1)
+            f = f[1..].Trim('"');
+        return f;
     }
 
     private void MultiExport_Click(object sender, RoutedEventArgs e)

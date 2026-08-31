@@ -187,10 +187,16 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <WrapPanel Grid.Row="0">
-                        <Button Content="목록 지우기" Click="MultiClear_Click"/>
+                    <DockPanel Grid.Row="0" LastChildFill="False">
+                        <!-- 실수 방지: 목록 지우기는 붉은색으로 우측 끝에 분리 -->
+                        <Button DockPanel.Dock="Right" Content="목록 지우기" Click="MultiClear_Click"
+                                Background="#FFD9534F" Foreground="White" FontWeight="Bold"
+                                Padding="12,2" Margin="24,0,4,0"
+                                ToolTip="목록 전체를 삭제합니다 (되돌릴 수 없음)"/>
                         <Button Content="CSV 내보내기" Click="MultiExport_Click"
                                 ToolTip="현재 보기 모드(세로/가로)와 정렬 순서 그대로 내보냅니다"/>
+                        <Button Content="CSV 불러오기" Click="MultiImport_Click"
+                                ToolTip="기존에 내보낸 CSV 목록을 불러와 이어서 검사합니다 - 불러온 항목과 중복되는 스캔은 자동 제외됩니다"/>
                         <CheckBox x:Name="MultiSaveImageCheck" Content="사진 저장 (판독 시마다 자동 저장)"
                                   VerticalAlignment="Center" Margin="16,0,0,0"
                                   Checked="Setting_Changed" Unchecked="Setting_Changed"
@@ -207,13 +213,9 @@
                         <CheckBox x:Name="MultiUdiCheck" Content="UDI 표시" VerticalAlignment="Center"
                                   Checked="MultiUdi_Changed" Unchecked="MultiUdi_Changed"
                                   ToolTip="체크하면 목록에 UDI(바코드 원문) 컬럼을 표시합니다 (기본 숨김)"/>
-                    </WrapPanel>
+                    </DockPanel>
 
                     <DockPanel Grid.Row="1" Margin="4,4">
-                        <!-- 우측 상단: 실시간 스캔 속도 (최근 스캔 간격 평균) -->
-                        <TextBlock DockPanel.Dock="Right" x:Name="ScanRateText" Text="스캔 속도 0 Unit/Min"
-                                   FontSize="20" FontWeight="Bold" Foreground="#FF666666"
-                                   VerticalAlignment="Top" Margin="0,4,8,0"/>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock x:Name="BigCountText" Text="0" FontSize="56" FontWeight="Bold"
                                        Foreground="#FFE67E00" VerticalAlignment="Center"/>
