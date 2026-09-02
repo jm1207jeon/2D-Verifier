@@ -1,7 +1,7 @@
 <Window x:Class="ZebraScannerSuite.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="UDI Capture_ver.1" Height="880" Width="1400"
+        Title="UDI Capture_ver.1" Height="880" Width="1400" MinWidth="1024" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         Loaded="Window_Loaded" Closing="Window_Closing" KeyDown="Window_KeyDown"
         PreviewTextInput="Window_PreviewTextInput">
@@ -13,7 +13,7 @@
             </StatusBarItem>
             <Separator/>
             <StatusBarItem HorizontalContentAlignment="Stretch">
-                <TextBlock x:Name="StatusText" Text="준비"/>
+                <TextBlock x:Name="StatusText" Text="준비" TextTrimming="CharacterEllipsis"/>
             </StatusBarItem>
             <Separator/>
             <StatusBarItem>
@@ -80,7 +80,8 @@
                                 <StackPanel Grid.Column="1" Margin="8,0,0,0">
                                     <TextBlock x:Name="SymbologyText" Text="-" FontSize="14" FontWeight="Bold"
                                                Foreground="#FF1A5276" HorizontalAlignment="Center"/>
-                                    <Button Content="지우기" Click="ClearScan_Click"/>
+                                    <Button Content="지우기" Click="ClearScan_Click"
+                                            ToolTip="바코드 표시·이미지·실시간 목록(중복 판정 기록 포함)을 모두 지웁니다"/>
                                 </StackPanel>
                             </Grid>
                         </GroupBox>
@@ -106,6 +107,8 @@
                             <StackPanel>
                                 <TextBlock Text="저장 경로 (재실행 시에도 유지됩니다)"/>
                                 <DockPanel>
+                                    <Button DockPanel.Dock="Right" Content="폴더 열기" Click="OpenDir_Click"
+                                            ToolTip="저장 폴더를 탐색기로 열어 저장된 사진을 바로 확인합니다"/>
                                     <Button DockPanel.Dock="Right" Content="찾아보기" Click="BrowseDir_Click"/>
                                     <TextBox x:Name="SaveDirText" VerticalAlignment="Center" TextChanged="Setting_TextChanged"/>
                                 </DockPanel>
@@ -132,7 +135,7 @@
                             </DataGrid>
                         </GroupBox>
 
-                        <GroupBox Grid.Row="2" Header="실시간 목록 (같은 LOT끼리 묶음 표시)">
+                        <GroupBox Grid.Row="2" x:Name="ScanListBox" Header="실시간 목록 (같은 LOT끼리 묶음 표시)">
                             <DataGrid x:Name="ScanListGrid" AutoGenerateColumns="False" IsReadOnly="True"
                                       HeadersVisibility="Column" CanUserAddRows="False"
                                       RowHeight="24" FontSize="13"
@@ -192,7 +195,7 @@
                         <Button DockPanel.Dock="Right" Content="목록 지우기" Click="MultiClear_Click"
                                 Background="#FFD9534F" Foreground="White" FontWeight="Bold"
                                 Padding="12,2" Margin="24,0,4,0"
-                                ToolTip="목록 전체를 삭제합니다 (되돌릴 수 없음)"/>
+                                ToolTip="목록 전체를 삭제합니다 (되돌릴 수 없음 - 확인 대화상자가 표시됩니다)"/>
                         <Button Content="CSV 내보내기" Click="MultiExport_Click"
                                 ToolTip="현재 보기 모드(세로/가로)와 정렬 순서 그대로 내보냅니다"/>
                         <Button Content="CSV 불러오기" Click="MultiImport_Click"
@@ -228,6 +231,9 @@
                                        ToolTip="중복 없는 고유 LOT 개수"/>
                             <TextBlock Text="총 읽음: " VerticalAlignment="Center"/>
                             <TextBlock x:Name="MultiTotalText" Text="0" FontWeight="Bold" MinWidth="50" VerticalAlignment="Center"/>
+                            <!-- CSV 저장 여부: 종료·목록 지우기 전에 내보내기를 유도 -->
+                            <TextBlock x:Name="MultiDirtyText" Text="" FontWeight="Bold" Margin="24,0,0,0" VerticalAlignment="Center"
+                                       ToolTip="마지막 CSV 내보내기 이후 추가된 데이터가 있으면 '미저장'으로 표시됩니다"/>
                         </StackPanel>
                     </DockPanel>
 
@@ -253,7 +259,7 @@
                                     <DataGridTextColumn Header="GTIN" Binding="{Binding Gtin}" SortMemberPath="Gtin" Width="120"/>
                                     <DataGridTextColumn Header="PN" Binding="{Binding Pn}" SortMemberPath="Pn" Width="85"/>
                                     <DataGridTextColumn Header="LOT" Binding="{Binding Lot}" SortMemberPath="Lot" Width="85"/>
-                                    <DataGridTextColumn Header="SN" Binding="{Binding Sn}" SortMemberPath="Sn"
+                                    <DataGridTextColumn Header="SN" Binding="{Binding Sn}" SortMemberPath="SnNum"
                                                         Width="48" ElementStyle="{StaticResource RightCell}"/>
                                     <DataGridTextColumn Header="MFG" Binding="{Binding Mfg}" SortMemberPath="Mfg" Width="88"
                                                         ElementStyle="{StaticResource MfgCell}"/>

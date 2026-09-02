@@ -46,7 +46,18 @@ public sealed class CoreScannerService : IDisposable
 
     public bool IsOpen { get; private set; }
     public List<ScannerInfo> Scanners { get; } = new();
-    public ScannerInfo? ActiveScanner => Scanners.Count > 0 ? Scanners[0] : null;
+
+    /// <summary>첫 번째 스캐너 (PnP 재열거로 목록이 갱신되는 중에도 안전하게 읽기 위해 lock 안에서 조회)</summary>
+    public ScannerInfo? ActiveScanner
+    {
+        get { lock (_lock) return Scanners.Count > 0 ? Scanners[0] : null; }
+    }
+
+    /// <summary>현재 연결된 스캐너 수 (lock 보호)</summary>
+    public int ScannerCount
+    {
+        get { lock (_lock) return Scanners.Count; }
+    }
 
     /// <summary>바코드 디코드 이벤트 (COM 스레드에서 호출됨 - UI는 Dispatcher 필요)</summary>
     public event Action<BarcodeData>? BarcodeScanned;
@@ -87,7 +98,17 @@ public sealed class CoreScannerService : IDisposable
             if (_core == null) return; // Dispose와의 경쟁 방지 - null 체크를 lock 안에서 재확인
             Scanners.Clear();
             int[] ids = new int[255];
-            _core.GetScanners(out short num, ids, out string outXml, out int status);
+            string outXml;
+            int status;
+            try
+            {
+                _core.GetScanners(out short num, ids, out outXml, out status);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("CoreScanner GetScanners 실패", ex);
+                return;
+            }
             if (status != 0 || string.IsNullOrWhiteSpace(outXml)) return;
             try
             {
@@ -118,8 +139,18 @@ public sealed class CoreScannerService : IDisposable
         lock (_lock)
         {
             if (_core == null) return (-1, "");
-            _core.ExecCommand(opcode, ref inXml, out string outXml, out int status);
-            return (status, outXml ?? "");
+            try
+            {
+                _core.ExecCommand(opcode, ref inXml, out string outXml, out int status);
+                return (status, outXml ?? "");
+            }
+            catch (Exception ex)
+            {
+                // COM 호출 자체가 실패(RPC 끊김, 드라이버 서비스 중지, USB 분리 등)해도
+                // 호출 측에는 "명령 실패"로만 알리고 예외를 밖으로 던지지 않는다.
+                AppLog.Error($"CoreScanner ExecCommand({opcode}) 실패", ex);
+                return (-2, "");
+            }
         }
     }
 
@@ -236,7 +267,7 @@ public sealed class CoreScannerService : IDisposable
             RefreshScanners();
             DevicesChanged?.Invoke();
         }
-        catch { }
+        catch (Exception ex) { AppLog.Error("PnP 이벤트 처리 오류", ex); }
     }
 
     // ---------------- 유틸 ----------------

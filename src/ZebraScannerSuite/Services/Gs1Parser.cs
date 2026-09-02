@@ -212,10 +212,14 @@ public static class Gs1Parser
         return result;
     }
 
-    /// <summary>GS1 날짜(YYMMDD) → YYYY-MM-DD. DD=00이면 YYYY-MM 로.</summary>
+    /// <summary>GS1 날짜(YYMMDD) → YYYY-MM-DD. DD=00이면 YYYY-MM 로.
+    /// 월/일이 달력 범위를 벗어나면(오독·잘못된 라벨) 변환하지 않고 원문을 그대로 돌려줘
+    /// 화면에서 "2025-13-45" 같은 가짜 날짜가 정상 값처럼 보이지 않게 한다.</summary>
     public static string FormatGs1Date(string v)
     {
-        if (v.Length != 6 || !v.All(char.IsDigit)) return v;
+        if (string.IsNullOrEmpty(v) || v.Length != 6 || !v.All(char.IsDigit)) return v ?? "";
+        int mmv = int.Parse(v[2..4]), ddv = int.Parse(v[4..6]);
+        if (mmv < 1 || mmv > 12 || ddv > 31) return v;
         int yy = int.Parse(v[..2]);
         // 현재 연도 기준 슬라이딩 윈도우([-49, +50]년)로 세기를 판단해 2050년 이후에도 안전하게 동작
         int now = DateTime.Now.Year;

@@ -49,6 +49,8 @@ public class MultiScanRow
     public string Exp { get; set; } = "";
     public string Pn { get; set; } = "";
     public string Sn { get; set; } = "";
+    /// <summary>SN 정렬용 숫자값 (문자열 정렬 시 1,10,11,2… 순으로 섞이는 문제 방지; 숫자가 아니면 맨 뒤)</summary>
+    public int SnNum => int.TryParse(Sn, out int n) ? n : int.MaxValue;
     public string Upn { get; set; } = "";
     public string Raw { get; set; } = "";
     public int Count { get; set; } = 1;
@@ -82,8 +84,8 @@ public class MultiLotRow
         .Select(n => new SnSlot { Num = n }).ToList();
     /// <summary>1~15 범위 밖 시리얼 (슬롯 우측에 별도 표시)</summary>
     public string SnExtra { get; set; } = "";
-    /// <summary>해당 로트의 스캔된 총 수량 (시리얼 개수)</summary>
-    public string Qty { get; set; } = "";
+    /// <summary>해당 로트의 스캔된 총 수량 (시리얼 개수). 정수형이라 QTY 헤더 정렬이 숫자 순으로 된다.</summary>
+    public int Qty { get; set; }
     public string Mfg { get; set; } = "";
     /// <summary>MFG가 EXP에서 역산된 값인지 (파란색 표시용)</summary>
     public bool MfgComputed { get; set; }

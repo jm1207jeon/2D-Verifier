@@ -27,21 +27,53 @@ public static class ImageSaveService
         return s.Length > 80 ? s[..80] : s;
     }
 
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON","PRN","AUX","NUL","COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
+        "LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9",
+    };
+
+    /// <summary>LOT 값을 하위 폴더명으로 정제. "."/".." 처럼 상위 폴더로 빠져나가는 이름,
+    /// 윈도우 예약 이름(CON, NUL 등), 끝의 점/공백은 폴더 생성 실패나 경로 이탈을 일으키므로 보정한다.
+    /// 쓸 수 있는 이름이 남지 않으면 빈 문자열(폴더 생략).</summary>
+    public static string SanitizeFolderName(string s)
+    {
+        s = SanitizeFileName(s ?? "").Trim().TrimEnd('.', ' ');
+        if (s.Length == 0 || s.All(c => c == '.' || c == '_')) return "";
+        string stem = s.Split('.')[0];
+        if (ReservedNames.Contains(stem)) s = "_" + s;
+        return s;
+    }
+
     /// <summary>이미지 저장 후 전체 경로 반환.
     /// 옵션에 따라 날짜(YYYY-MM-DD)·LOT명 하위 폴더를 자동 생성해 그 안에 저장한다.</summary>
     public static string Save(byte[] imageBytes, string barcode, string symbology, string ocr, AppSettings settings)
     {
+        if (imageBytes == null || imageBytes.Length == 0)
+            throw new InvalidOperationException("이미지 데이터가 비어 있어 저장하지 않았습니다.");
         string dir = settings.ImageSaveDirectory;
+        if (!SettingsService.IsValidDirectory(dir))
+            throw new InvalidOperationException(
+                $"이미지 저장 경로가 올바르지 않습니다: '{dir}' - [일반 스캔] 탭에서 저장 경로를 다시 지정하세요.");
         if (settings.SaveDateFolder)
             dir = Path.Combine(dir, DateTime.Now.ToString("yyyy-MM-dd"));
         if (settings.SaveLotFolder)
         {
             string lot = "";
             try { lot = Gs1Parser.Parse(barcode).GetValueOrDefault("10", ""); } catch { }
-            if (!string.IsNullOrWhiteSpace(lot))
-                dir = Path.Combine(dir, SanitizeFileName(lot));
+            string folder = SanitizeFolderName(lot);
+            if (folder.Length > 0)
+                dir = Path.Combine(dir, folder);
         }
-        Directory.CreateDirectory(dir);
+        try
+        {
+            Directory.CreateDirectory(dir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"저장 폴더를 만들 수 없습니다: {dir} - 드라이브 연결(네트워크/USB) 및 쓰기 권한을 확인하세요. ({ex.Message})", ex);
+        }
         string ext = DetectExtension(imageBytes);
         string rule = string.IsNullOrWhiteSpace(settings.FileNameRule)
             ? "{DATE:yyyyMMdd}_{BARCODE}_{SEQ:3}" : settings.FileNameRule;

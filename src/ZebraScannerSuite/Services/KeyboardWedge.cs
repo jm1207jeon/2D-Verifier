@@ -50,10 +50,11 @@ public static class KeyboardWedge
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
-    /// <summary>활성 창 커서 위치에 문자열 타이핑. appendEnter 시 마지막에 Enter 전송(엑셀 다음 셀 이동).</summary>
-    public static void TypeText(string text, bool appendEnter = true)
+    /// <summary>활성 창 커서 위치에 문자열 타이핑. appendEnter 시 마지막에 Enter 전송(엑셀 다음 셀 이동).
+    /// 반환값 false = 입력이 차단됨 (대상 프로그램이 관리자 권한으로 실행 중이면 UIPI가 SendInput을 막는다).</summary>
+    public static bool TypeText(string text, bool appendEnter = true)
     {
-        if (string.IsNullOrEmpty(text) && !appendEnter) return;
+        if (string.IsNullOrEmpty(text) && !appendEnter) return true;
         var list = new List<INPUT>(text.Length * 2 + 2);
         foreach (char c in text)
         {
@@ -66,8 +67,19 @@ public static class KeyboardWedge
             list.Add(Make(VK_RETURN, 0, 0));
             list.Add(Make(VK_RETURN, 0, KEYEVENTF_KEYUP));
         }
-        if (list.Count > 0)
-            SendInput((uint)list.Count, list.ToArray(), Marshal.SizeOf<INPUT>());
+        if (list.Count == 0) return true;
+        try
+        {
+            uint sent = SendInput((uint)list.Count, list.ToArray(), Marshal.SizeOf<INPUT>());
+            if (sent == list.Count) return true;
+            AppLog.Warn($"키보드 웨지 입력 차단/부분 전송: {sent}/{list.Count} (Win32 오류 {Marshal.GetLastWin32Error()})");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("키보드 웨지 SendInput 실패", ex);
+            return false;
+        }
     }
 
     private static INPUT Make(ushort vk, ushort scan, uint flags) => new()
