@@ -28,7 +28,7 @@ public class RobustnessTests
     [InlineData("\"=\"\"08806367\"\"\"", "08806367")]   // 이 프로그램 내보내기 형식 (="값")
     [InlineData("=\"25081215\"", "25081215")]           // 따옴표 한 겹만 남은 경우
     [InlineData("25081215", "25081215")]                // 엑셀 재저장본(일반 값)
-    [InlineData("  1, 2, 3 ", "1, 2, 3")]               // 앞뒤 공백 제거
+    [InlineData("\"  1, 2, 3 \"", "1, 2, 3")]           // 따옴표 필드 안의 콤마 유지 + 앞뒤 공백 제거
     public void CSV_텍스트_보호_래핑_제거(string raw, string expected)
     {
         // ParseLine이 바깥 따옴표를 벗긴 뒤 Unwrap이 ="…" 래핑을 벗긴다
