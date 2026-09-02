@@ -139,7 +139,7 @@ public partial class MainWindow : Window
 
         _ = Task.Run(WorkerLoop);
 
-        await Task.Run(InitScanner);
+        await Task.Run(() => InitScanner());
         UpdateScannerStatus();
 
         // 시작 시 스캐너 동작 모드 보장 (재시도 포함):
